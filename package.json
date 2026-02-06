@@ -6,7 +6,7 @@
   "publisher": "pivot",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Pivotteam/toggl-track-vscode.git"
+    "url": "https://github.com/alexdeg92/toggl-track-vscode.git"
   },
   "engines": {
     "vscode": "^1.74.0"

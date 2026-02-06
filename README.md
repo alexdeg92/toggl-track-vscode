@@ -26,7 +26,7 @@ Built for the Pivot team, but works for anyone using Toggl + git!
 ### From Source
 
 ```bash
-git clone https://github.com/Pivotteam/toggl-track-vscode.git
+git clone https://github.com/alexdeg92/toggl-track-vscode.git
 cd toggl-track-vscode
 npm install
 npm run compile
