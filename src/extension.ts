@@ -319,24 +319,33 @@ class TogglTracker {
         }
       );
       
-      // Find most recent entry with matching description (stopped, not running)
+      // Find most recent entry with matching description that has project or tags
       const entries = response.data || [];
-      // Try exact match first, then fuzzy match (starts with same text)
+      
+      // Helper to check if descriptions match (exact or fuzzy)
+      const descMatches = (entryDesc: string, targetDesc: string) => {
+        if (!entryDesc || !targetDesc) return false;
+        if (entryDesc === targetDesc) return true;
+        // Fuzzy match on first 30 chars
+        return entryDesc.startsWith(targetDesc.substring(0, 30)) ||
+               targetDesc.startsWith(entryDesc.substring(0, 30));
+      };
+      
+      // First priority: find entry with SAME description that HAS project or tags
       let matchingEntry = entries.find((e: any) => 
-        e.description === description && e.duration >= 0
+        e.duration >= 0 && 
+        descMatches(e.description, description) &&
+        (e.project_id || (e.tags && e.tags.length > 0))
       );
       
-      // If no exact match, try matching by task name similarity
+      // Fallback: any matching entry (even without project/tags)
       if (!matchingEntry) {
         matchingEntry = entries.find((e: any) => 
-          e.duration >= 0 && e.description && description && (
-            e.description.startsWith(description.substring(0, 30)) ||
-            description.startsWith(e.description.substring(0, 30))
-          )
+          e.duration >= 0 && descMatches(e.description, description)
         );
       }
       
-      console.log(`Looking for: "${description}", found: "${matchingEntry?.description}"`);
+      console.log(`Looking for: "${description}", found: "${matchingEntry?.description}" with project: ${matchingEntry?.project_id}, tags: ${matchingEntry?.tags?.join(', ')}`);
       return matchingEntry || null;
     } catch (error) {
       console.error('Failed to fetch previous Toggl entries:', error);
