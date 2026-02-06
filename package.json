@@ -2,7 +2,7 @@
   "name": "toggl-track-auto",
   "displayName": "Toggl Track Auto",
   "description": "Automatically track time in Toggl based on your git branch and Monday.com tickets",
-  "version": "0.21.4",
+  "version": "0.21.5",
   "publisher": "pivot",
   "repository": {
     "type": "git",
@@ -62,7 +62,7 @@
         {
           "id": "togglMondayTask",
           "name": "Monday.com Task",
-          "when": "togglMondayTask.visible"
+          "icon": "$(checklist)"
         }
       ]
     },
