@@ -519,7 +519,7 @@ class TogglTracker {
       vscode.StatusBarAlignment.Left,
       99.5
     );
-    this.newBranchStatusBarItem.command = 'toggl-track-auto.createBranch';
+    this.newBranchStatusBarItem.command = 'toggl-track-auto.createBranchFromTask';
     this.newBranchStatusBarItem.text = '$(git-branch) New Branch';
     this.newBranchStatusBarItem.tooltip = 'Create a new branch from a Monday.com task';
     this.newBranchStatusBarItem.show();
