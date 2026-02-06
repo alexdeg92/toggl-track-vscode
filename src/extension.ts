@@ -163,6 +163,18 @@ class TogglTracker {
     vscode.workspace.onDidChangeTextDocument(() => this.onActivity());
     vscode.window.onDidChangeActiveTextEditor(() => this.onActivity());
     vscode.window.onDidChangeTextEditorSelection(() => this.onActivity());
+
+    // Handle window focus - only active window manages Toggl
+    vscode.window.onDidChangeWindowState((state) => {
+      if (state.focused) {
+        console.log('Window focused - taking over Toggl management');
+        this.checkBranch(); // Re-check and take over
+      } else {
+        console.log('Window lost focus - pausing Toggl management');
+        // Don't stop the timer, just pause local management
+        // The focused window will take over
+      }
+    });
   }
 
   async stop() {
@@ -261,6 +273,25 @@ class TogglTracker {
     return null;
   }
 
+  private async getCurrentTogglEntry(): Promise<any | null> {
+    const config = this.getConfig();
+    const apiToken = config.get<string>('apiToken');
+    
+    if (!apiToken) return null;
+    
+    try {
+      const response = await axios.get(
+        'https://api.track.toggl.com/api/v9/me/time_entries/current',
+        {
+          auth: { username: apiToken, password: 'api_token' },
+        }
+      );
+      return response.data;
+    } catch (error) {
+      return null;
+    }
+  }
+
   private async checkBranch() {
     if (!this.isTracking) return;
 
@@ -271,6 +302,27 @@ class TogglTracker {
       }
       this.updateStatusBar('$(clock) Toggl: No git repo');
       return;
+    }
+
+    // Sync with current Toggl state (handles multi-window scenarios)
+    const currentTogglEntry = await this.getCurrentTogglEntry();
+    if (currentTogglEntry && currentTogglEntry.id) {
+      // There's already a running timer - adopt it if we don't have one
+      if (!this.currentEntryId) {
+        this.currentEntryId = currentTogglEntry.id;
+        this.currentDescription = currentTogglEntry.description || '';
+        this.updateStatusBar(`$(clock) Toggl: ${this.currentDescription.substring(0, 30)}...`);
+      }
+      // If the running timer matches our branch context, we're good
+      // If not, another window is controlling it - don't interfere
+      if (this.currentEntryId !== currentTogglEntry.id) {
+        // Another window started a different timer - sync to it
+        this.currentEntryId = currentTogglEntry.id;
+        this.currentDescription = currentTogglEntry.description || '';
+        this.currentBranch = branch; // Avoid restarting
+        this.updateStatusBar(`$(clock) Toggl: ${this.currentDescription.substring(0, 30)}...`);
+        return;
+      }
     }
 
     // Resume tracking if we were idle
