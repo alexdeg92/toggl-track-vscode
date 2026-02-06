@@ -110,6 +110,11 @@ class TogglTracker {
   private idleCheckInterval: NodeJS.Timeout | null = null;
   private isTracking: boolean = false;
   private taskCache: Map<string, string> = new Map();
+  // Track last stopped entry for resume feature
+  private lastStoppedDescription: string = '';
+  private lastStoppedTime: number = 0;
+  private lastStoppedEntryId: number | null = null;
+  private currentDescription: string = '';
 
   constructor() {
     this.statusBarItem = vscode.window.createStatusBarItem(
@@ -302,7 +307,13 @@ class TogglTracker {
       console.error('Failed to stop Toggl entry:', error);
     }
 
+    // Save info for resume feature
+    this.lastStoppedEntryId = this.currentEntryId;
+    this.lastStoppedDescription = this.currentDescription;
+    this.lastStoppedTime = Date.now();
+    
     this.currentEntryId = null;
+    this.currentDescription = '';
   }
 
   private async startNewEntry(branch: string) {
@@ -329,12 +340,48 @@ class TogglTracker {
     }
 
     try {
+      // Check if we should resume a recent entry (same task, stopped within 10 min)
+      const tenMinutesMs = 10 * 60 * 1000;
+      const timeSinceLastStop = Date.now() - this.lastStoppedTime;
+      
+      if (
+        this.lastStoppedEntryId &&
+        this.lastStoppedDescription === description &&
+        timeSinceLastStop < tenMinutesMs
+      ) {
+        // Resume the previous entry by restarting it
+        console.log('Resuming previous Toggl entry');
+        
+        // Get the old entry and create a new one continuing from it
+        const response = await axios.post(
+          `https://api.track.toggl.com/api/v9/workspaces/${workspaceId}/time_entries`,
+          {
+            description,
+            workspace_id: workspaceId,
+            start: new Date().toISOString(),
+            duration: -1,
+            created_with: 'toggl-track-vscode',
+            billable: true,
+            ...(projectId && projectId > 0 ? { project_id: projectId } : {}),
+          },
+          {
+            auth: { username: apiToken, password: 'api_token' },
+          }
+        );
+        
+        this.currentEntryId = response.data.id;
+        this.currentDescription = description;
+        this.updateStatusBar(`$(clock) Toggl: ${description.substring(0, 30)}... (resumed)`);
+        return;
+      }
+
       const payload: any = {
         description,
         workspace_id: workspaceId,
         start: new Date().toISOString(),
         duration: -1, // Running timer
         created_with: 'toggl-track-vscode',
+        billable: true,
       };
 
       if (projectId && projectId > 0) {
@@ -350,6 +397,7 @@ class TogglTracker {
       );
 
       this.currentEntryId = response.data.id;
+      this.currentDescription = description;
       this.updateStatusBar(`$(clock) Toggl: ${description.substring(0, 30)}...`);
       
     } catch (error) {
