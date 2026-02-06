@@ -123,6 +123,12 @@ class TogglTracker {
       100
     );
     this.statusBarItem.command = 'toggl-track-auto.status';
+    
+    // Show version in tooltip
+    const extension = vscode.extensions.getExtension('pivot.toggl-track-auto');
+    const version = extension?.packageJSON?.version || 'unknown';
+    this.statusBarItem.tooltip = `Toggl Track Auto v${version}\nClick for status`;
+    
     this.statusBarItem.show();
     this.updateStatusBar('$(clock) Toggl: Initializing...');
   }
