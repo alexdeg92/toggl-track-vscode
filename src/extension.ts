@@ -168,11 +168,25 @@ class TogglTracker {
     vscode.window.onDidChangeWindowState(async (state) => {
       if (state.focused && this.isTracking) {
         console.log('Window focused - taking over Toggl tracking');
-        // Force switch to this window's branch
+        // Check what Toggl is currently tracking
+        const currentTogglEntry = await this.getCurrentTogglEntry();
         const branch = await this.getCurrentBranch();
-        if (branch && branch !== this.currentBranch) {
-          this.currentBranch = ''; // Force restart
-          await this.checkBranch();
+        
+        if (branch) {
+          // Get what this branch SHOULD be tracking
+          const ticketId = this.extractTicketId(branch);
+          let expectedDesc = branch;
+          if (ticketId) {
+            const taskName = await this.getMondayTaskName(ticketId);
+            if (taskName) expectedDesc = taskName;
+          }
+          
+          // If Toggl is tracking something different, switch to this branch
+          if (!currentTogglEntry || currentTogglEntry.description !== expectedDesc) {
+            console.log(`Switching from "${currentTogglEntry?.description}" to "${expectedDesc}"`);
+            this.currentBranch = ''; // Force restart
+            await this.checkBranch();
+          }
         }
       }
     });
