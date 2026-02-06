@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import axios from 'axios';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -8,8 +9,379 @@ const execAsync = promisify(exec);
 
 // Monday.com API token - must be set via MONDAY_TOKEN env var or settings
 function getMondayToken(): string {
-  return process.env.MONDAY_TOKEN || vscode.workspace.getConfiguration('togglTrackAuto').get<string>('mondayToken') || '';
+  return process.env.MONDAY_TOKEN || vscode.workspace.getConfiguration('togglTrackAuto').get<string>('mondayApiToken') || vscode.workspace.getConfiguration('togglTrackAuto').get<string>('mondayToken') || '';
 }
+
+// ========== Monday.com Task Integration ==========
+
+const MONDAY_API_URL = 'https://api.monday.com/v2';
+const MONDAY_BOARD_URL_BASE = 'https://pivot584586.monday.com/boards';
+
+interface MondayTask {
+  id: string;
+  name: string;
+  boardId: string;
+}
+
+interface BranchTaskMapping {
+  [branch: string]: {
+    taskId: string;
+    taskName: string;
+    boardId: string;
+    url: string;
+  };
+}
+
+function getMondayBoardId(): string {
+  return vscode.workspace.getConfiguration('togglTrackAuto').get<string>('mondayBoardId') || '4176868787';
+}
+
+function getMondayTaskUrl(boardId: string, taskId: string): string {
+  return `${MONDAY_BOARD_URL_BASE}/${boardId}/pulses/${taskId}`;
+}
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .substring(0, 60);
+}
+
+function getWorkspaceRoot(): string | null {
+  const folders = vscode.workspace.workspaceFolders;
+  return folders && folders.length > 0 ? folders[0].uri.fsPath : null;
+}
+
+function getMondayTasksFilePath(): string | null {
+  const root = getWorkspaceRoot();
+  if (!root) return null;
+  return path.join(root, '.vscode', 'monday-tasks.json');
+}
+
+function readBranchTaskMappings(): BranchTaskMapping {
+  const filePath = getMondayTasksFilePath();
+  if (!filePath) return {};
+  try {
+    if (fs.existsSync(filePath)) {
+      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    }
+  } catch {
+    // ignore
+  }
+  return {};
+}
+
+function writeBranchTaskMappings(mappings: BranchTaskMapping): void {
+  const filePath = getMondayTasksFilePath();
+  if (!filePath) return;
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(filePath, JSON.stringify(mappings, null, 2));
+
+  // Ensure .vscode/monday-tasks.json is in .gitignore
+  const root = getWorkspaceRoot();
+  if (root) {
+    const gitignorePath = path.join(root, '.gitignore');
+    const entry = '.vscode/monday-tasks.json';
+    try {
+      let content = '';
+      if (fs.existsSync(gitignorePath)) {
+        content = fs.readFileSync(gitignorePath, 'utf-8');
+      }
+      if (!content.includes(entry)) {
+        const newline = content.endsWith('\n') ? '' : '\n';
+        fs.writeFileSync(gitignorePath, content + newline + entry + '\n');
+      }
+    } catch {
+      // best effort
+    }
+  }
+}
+
+async function fetchCurrentMondayUserId(token: string): Promise<number | null> {
+  try {
+    const response = await axios.post(MONDAY_API_URL, {
+      query: '{ me { id } }',
+    }, {
+      headers: {
+        'Authorization': token,
+        'Content-Type': 'application/json',
+      },
+    });
+    return response.data?.data?.me?.id || null;
+  } catch (error) {
+    console.error('Failed to fetch Monday user ID:', error);
+    return null;
+  }
+}
+
+async function fetchUserTasks(token: string, boardId: string): Promise<MondayTask[]> {
+  try {
+    // Get current user ID
+    const userId = await fetchCurrentMondayUserId(token);
+    if (!userId) {
+      vscode.window.showErrorMessage('Monday.com: Could not determine current user. Check your MONDAY_TOKEN.');
+      return [];
+    }
+
+    // Fetch all items from the board, filtering by person column
+    const query = `
+      query {
+        boards(ids: [${boardId}]) {
+          items_page(limit: 100, query_params: {rules: [{column_id: "person", compare_value: [${userId}]}], operator: and}) {
+            items {
+              id
+              name
+              group {
+                title
+              }
+              column_values(ids: ["status"]) {
+                text
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const response = await axios.post(MONDAY_API_URL, { query }, {
+      headers: {
+        'Authorization': token,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const boards = response.data?.data?.boards;
+    if (!boards || boards.length === 0) return [];
+
+    const items = boards[0].items_page?.items || [];
+
+    // Filter out "Done" items
+    return items
+      .filter((item: any) => {
+        const status = item.column_values?.[0]?.text || '';
+        return status.toLowerCase() !== 'done';
+      })
+      .map((item: any) => ({
+        id: item.id,
+        name: item.name,
+        boardId,
+      }));
+  } catch (error: any) {
+    console.error('Failed to fetch Monday tasks:', error);
+    vscode.window.showErrorMessage(`Monday.com API error: ${error.message || 'Unknown error'}`);
+    return [];
+  }
+}
+
+function generatePrepareCommitMsgHook(taskId: string, boardId: string): string {
+  const url = getMondayTaskUrl(boardId, taskId);
+  return `#!/bin/sh
+# Auto-generated by Toggl Track Auto - Monday.com integration
+# Links commits to Monday task: ${url}
+
+COMMIT_MSG_FILE=$1
+COMMIT_SOURCE=$2
+
+# Don't modify merge commits or amended commits
+if [ "$COMMIT_SOURCE" = "merge" ] || [ "$COMMIT_SOURCE" = "squash" ]; then
+  exit 0
+fi
+
+# Check if the Monday link is already in the message
+if grep -q "Monday task: ${url}" "$COMMIT_MSG_FILE" 2>/dev/null; then
+  exit 0
+fi
+
+# Append the Monday task link
+echo "" >> "$COMMIT_MSG_FILE"
+echo "Monday task: ${url}" >> "$COMMIT_MSG_FILE"
+`;
+}
+
+async function installPrepareCommitMsgHook(taskId: string, boardId: string): Promise<boolean> {
+  const root = getWorkspaceRoot();
+  if (!root) return false;
+
+  const hooksDir = path.join(root, '.git', 'hooks');
+  const hookPath = path.join(hooksDir, 'prepare-commit-msg');
+
+  try {
+    // Ensure hooks directory exists
+    if (!fs.existsSync(hooksDir)) {
+      fs.mkdirSync(hooksDir, { recursive: true });
+    }
+
+    // Check if hook already exists and wasn't created by us
+    if (fs.existsSync(hookPath)) {
+      const existing = fs.readFileSync(hookPath, 'utf-8');
+      if (!existing.includes('Toggl Track Auto - Monday.com integration')) {
+        // Backup existing hook
+        const backupPath = hookPath + '.backup';
+        fs.writeFileSync(backupPath, existing);
+        console.log(`Backed up existing prepare-commit-msg hook to ${backupPath}`);
+      }
+    }
+
+    const hookContent = generatePrepareCommitMsgHook(taskId, boardId);
+    fs.writeFileSync(hookPath, hookContent, { mode: 0o755 });
+    return true;
+  } catch (error) {
+    console.error('Failed to install prepare-commit-msg hook:', error);
+    return false;
+  }
+}
+
+async function createBranchFromTask(): Promise<void> {
+  const root = getWorkspaceRoot();
+  if (!root) {
+    vscode.window.showErrorMessage('No workspace folder open.');
+    return;
+  }
+
+  const token = getMondayToken();
+  if (!token) {
+    vscode.window.showErrorMessage('Monday.com token not configured. Set MONDAY_TOKEN env var or togglTrackAuto.mondayApiToken setting.');
+    return;
+  }
+
+  const boardId = getMondayBoardId();
+
+  // Fetch tasks with progress
+  const tasks = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: 'Fetching Monday.com tasks...' },
+    () => fetchUserTasks(token, boardId)
+  );
+
+  if (tasks.length === 0) {
+    vscode.window.showInformationMessage('No open Monday.com tasks found assigned to you.');
+    return;
+  }
+
+  // Show QuickPick
+  const items = tasks.map(task => ({
+    label: task.name,
+    description: `#${task.id}`,
+    task,
+  }));
+
+  const selected = await vscode.window.showQuickPick(items, {
+    placeHolder: 'Select a Monday.com task to create a branch for',
+    matchOnDescription: true,
+  });
+
+  if (!selected) return;
+
+  const task = selected.task;
+  const suggestedBranch = `feat/${task.id}-${slugify(task.name)}`;
+
+  // Let user edit the branch name
+  const branchName = await vscode.window.showInputBox({
+    prompt: 'Branch name (edit if needed)',
+    value: suggestedBranch,
+    validateInput: (value) => {
+      if (!value || value.trim().length === 0) return 'Branch name cannot be empty';
+      if (/\s/.test(value)) return 'Branch name cannot contain spaces';
+      if (/[~^:?*\[\\]/.test(value)) return 'Branch name contains invalid characters';
+      return null;
+    },
+  });
+
+  if (!branchName) return;
+
+  // Create and checkout the branch
+  try {
+    await execAsync(`git checkout -b "${branchName}"`, { cwd: root });
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`Failed to create branch: ${error.message}`);
+    return;
+  }
+
+  // Store the mapping
+  const mappings = readBranchTaskMappings();
+  mappings[branchName] = {
+    taskId: task.id,
+    taskName: task.name,
+    boardId: task.boardId,
+    url: getMondayTaskUrl(task.boardId, task.id),
+  };
+  writeBranchTaskMappings(mappings);
+
+  // Install prepare-commit-msg hook
+  const hookInstalled = await installPrepareCommitMsgHook(task.id, task.boardId);
+
+  const actions = ['Open in Monday.com'];
+  const result = await vscode.window.showInformationMessage(
+    `✅ Branch "${branchName}" created and checked out.\n${hookInstalled ? 'Commit hook installed.' : '⚠️ Could not install commit hook.'}`,
+    ...actions
+  );
+
+  if (result === 'Open in Monday.com') {
+    vscode.env.openExternal(vscode.Uri.parse(getMondayTaskUrl(task.boardId, task.id)));
+  }
+}
+
+async function copyMondayTaskLink(): Promise<void> {
+  const root = getWorkspaceRoot();
+  if (!root) {
+    vscode.window.showErrorMessage('No workspace folder open.');
+    return;
+  }
+
+  try {
+    const { stdout } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: root });
+    const branch = stdout.trim();
+
+    const mappings = readBranchTaskMappings();
+    const mapping = mappings[branch];
+
+    if (!mapping) {
+      // Try to extract Monday ID from branch name as fallback
+      const match = branch.match(/(\d{6,})/);
+      if (match) {
+        const boardId = getMondayBoardId();
+        const url = getMondayTaskUrl(boardId, match[1]);
+        await vscode.env.clipboard.writeText(url);
+        vscode.window.showInformationMessage(`📋 Monday task link copied (from branch ID): ${url}`);
+        return;
+      }
+      vscode.window.showWarningMessage('No Monday.com task associated with this branch.');
+      return;
+    }
+
+    await vscode.env.clipboard.writeText(mapping.url);
+    vscode.window.showInformationMessage(`📋 Monday task link copied: ${mapping.url}`);
+  } catch (error) {
+    vscode.window.showErrorMessage('Failed to get current branch.');
+  }
+}
+
+// Monitor for branch pushes and suggest including Monday link
+async function checkBranchForMondayLink(): Promise<void> {
+  const root = getWorkspaceRoot();
+  if (!root) return;
+
+  try {
+    const { stdout } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: root });
+    const branch = stdout.trim();
+    const mappings = readBranchTaskMappings();
+    const mapping = mappings[branch];
+
+    if (mapping) {
+      // Update the prepare-commit-msg hook for the current branch's task
+      await installPrepareCommitMsgHook(mapping.taskId, mapping.boardId);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+// ========== End Monday.com Task Integration ==========
 
 async function runSetupWizard(): Promise<boolean> {
   const config = vscode.workspace.getConfiguration('togglTrackAuto');
@@ -890,7 +1262,10 @@ export async function activate(context: vscode.ExtensionContext) {
       if (success) {
         tracker.start();
       }
-    })
+    }),
+    // Monday.com integration commands
+    vscode.commands.registerCommand('toggl-track-auto.createBranchFromTask', () => createBranchFromTask()),
+    vscode.commands.registerCommand('toggl-track-auto.copyMondayTaskLink', () => copyMondayTaskLink()),
   );
 
   // Add tracker to subscriptions for proper disposal
@@ -907,6 +1282,9 @@ export async function activate(context: vscode.ExtensionContext) {
     // Auto-start if already configured
     tracker.start();
   }
+
+  // On startup, check if current branch has a Monday task and update hook
+  setTimeout(() => checkBranchForMondayLink(), 3000);
 }
 
 export function deactivate() {
