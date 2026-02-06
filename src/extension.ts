@@ -460,16 +460,20 @@ class TogglTracker {
       }
     }
     
-    // Look up previous Toggl entry with same description
+    // Look up previous Toggl entry with same description to copy project/tags
     const previousEntry = await this.getPreviousEntry(description);
+    
+    console.log('Previous entry lookup result:', JSON.stringify(previousEntry, null, 2));
     
     if (previousEntry) {
       // Reuse project and tags from previous entry
       if (previousEntry.project_id) {
         projectId = previousEntry.project_id;
+        console.log(`Copying project_id: ${projectId}`);
       }
       if (previousEntry.tags && previousEntry.tags.length > 0) {
-        tags = previousEntry.tags;
+        tags = [...previousEntry.tags];
+        console.log(`Copying tags: ${tags.join(', ')}`);
       }
       
       // Check if we should continue the previous entry (stopped within 10 min)
@@ -522,6 +526,8 @@ class TogglTracker {
       if (tags.length > 0) {
         payload.tags = tags;
       }
+
+      console.log('Creating Toggl entry with payload:', JSON.stringify(payload, null, 2));
 
       const response = await axios.post(
         `https://api.track.toggl.com/api/v9/workspaces/${workspaceId}/time_entries`,
