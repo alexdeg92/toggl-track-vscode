@@ -273,13 +273,12 @@ class TogglTracker {
     return null;
   }
 
-  // Find previous Toggl entry with same description to reuse project/tags
-  private async getPreviousEntrySettings(description: string): Promise<{ projectId: number | null, tags: string[] }> {
+  // Find previous Toggl entry with same description
+  private async getPreviousEntry(description: string): Promise<any | null> {
     const config = this.getConfig();
     const apiToken = config.get<string>('apiToken');
-    const workspaceId = config.get<number>('workspaceId');
     
-    if (!apiToken || !workspaceId) return { projectId: null, tags: [] };
+    if (!apiToken) return null;
     
     try {
       // Get recent time entries (last 7 days)
@@ -298,21 +297,18 @@ class TogglTracker {
         }
       );
       
-      // Find entry with matching description
+      // Find most recent entry with matching description (stopped, not running)
       const entries = response.data || [];
-      const matchingEntry = entries.find((e: any) => e.description === description);
+      const matchingEntry = entries.find((e: any) => 
+        e.description === description && e.duration >= 0
+      );
       
-      if (matchingEntry) {
-        return {
-          projectId: matchingEntry.project_id || null,
-          tags: matchingEntry.tags || [],
-        };
-      }
+      return matchingEntry || null;
     } catch (error) {
       console.error('Failed to fetch previous Toggl entries:', error);
     }
     
-    return { projectId: null, tags: [] };
+    return null;
   }
 
   private async getCurrentTogglEntry(): Promise<any | null> {
@@ -434,51 +430,51 @@ class TogglTracker {
       }
     }
     
-    // Look up previous Toggl entries with same description to reuse project/tags
-    const previousSettings = await this.getPreviousEntrySettings(description);
-    if (previousSettings.projectId) {
-      projectId = previousSettings.projectId;
-    }
-    if (previousSettings.tags.length > 0) {
-      tags = previousSettings.tags;
+    // Look up previous Toggl entry with same description
+    const previousEntry = await this.getPreviousEntry(description);
+    
+    if (previousEntry) {
+      // Reuse project and tags from previous entry
+      if (previousEntry.project_id) {
+        projectId = previousEntry.project_id;
+      }
+      if (previousEntry.tags && previousEntry.tags.length > 0) {
+        tags = previousEntry.tags;
+      }
+      
+      // Check if we should continue the previous entry (stopped within 10 min)
+      const tenMinutesMs = 10 * 60 * 1000;
+      const entryStopTime = new Date(previousEntry.stop).getTime();
+      const timeSinceStop = Date.now() - entryStopTime;
+      
+      if (timeSinceStop < tenMinutesMs) {
+        // Continue the previous entry by updating it to be running again
+        console.log('Continuing previous Toggl entry');
+        
+        try {
+          // Update the previous entry: set duration to -1 (running) and keep original start
+          const response = await axios.put(
+            `https://api.track.toggl.com/api/v9/workspaces/${workspaceId}/time_entries/${previousEntry.id}`,
+            {
+              duration: -1, // Make it running again
+              stop: null,   // Remove stop time
+            },
+            {
+              auth: { username: apiToken, password: 'api_token' },
+            }
+          );
+          
+          this.currentEntryId = response.data.id;
+          this.currentDescription = description;
+          this.updateStatusBar(`$(clock) Toggl: ${description.substring(0, 30)}... (continued)`);
+          return;
+        } catch (error) {
+          console.error('Failed to continue entry, creating new one:', error);
+        }
+      }
     }
 
     try {
-      // Check if we should resume a recent entry (same task, stopped within 10 min)
-      const tenMinutesMs = 10 * 60 * 1000;
-      const timeSinceLastStop = Date.now() - this.lastStoppedTime;
-      
-      if (
-        this.lastStoppedEntryId &&
-        this.lastStoppedDescription === description &&
-        timeSinceLastStop < tenMinutesMs
-      ) {
-        // Resume the previous entry by restarting it
-        console.log('Resuming previous Toggl entry');
-        
-        // Get the old entry and create a new one continuing from it
-        const response = await axios.post(
-          `https://api.track.toggl.com/api/v9/workspaces/${workspaceId}/time_entries`,
-          {
-            description,
-            workspace_id: workspaceId,
-            start: new Date().toISOString(),
-            duration: -1,
-            created_with: 'toggl-track-vscode',
-            billable: true,
-            ...(projectId && projectId > 0 ? { project_id: projectId } : {}),
-            ...(tags.length > 0 ? { tags } : {}),
-          },
-          {
-            auth: { username: apiToken, password: 'api_token' },
-          }
-        );
-        
-        this.currentEntryId = response.data.id;
-        this.currentDescription = description;
-        this.updateStatusBar(`$(clock) Toggl: ${description.substring(0, 30)}... (resumed)`);
-        return;
-      }
 
       const payload: any = {
         description,
