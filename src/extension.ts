@@ -168,7 +168,7 @@ class TogglTracker {
     // Handle window focus - focused window takes over Toggl
     vscode.window.onDidChangeWindowState(async (state) => {
       if (state.focused && this.isTracking) {
-        console.log('Window focused - taking over Toggl tracking');
+        console.log('Window focused - taking over Toggl tracking (v0.12.1)');
         // Check what Toggl is currently tracking
         const currentTogglEntry = await this.getCurrentTogglEntry();
         const branch = await this.getCurrentBranch();
