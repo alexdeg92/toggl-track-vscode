@@ -1736,8 +1736,9 @@ class TogglTracker {
       } else {
         vscode.window.showInformationMessage('Toggl: No active time entry');
       }
-    } catch (error) {
-      vscode.window.showErrorMessage('Toggl: Failed to fetch status');
+    } catch (error: any) {
+      const msg = error?.response?.data?.message || error?.message || 'Unknown error';
+      vscode.window.showErrorMessage(`Toggl: Failed to fetch status - ${msg}`);
     }
   }
 
