@@ -476,6 +476,7 @@ interface MondayItem {
 
 class TogglTracker {
   private statusBarItem: vscode.StatusBarItem;
+  private newBranchStatusBarItem: vscode.StatusBarItem;
   private breakStatusBarItem: vscode.StatusBarItem;
   private currentBranch: string = '';
   private currentEntryId: number | null = null;
@@ -512,6 +513,16 @@ class TogglTracker {
     
     this.statusBarItem.show();
     this.updateStatusBar('$(clock) Toggl: Initializing...');
+    
+    // New branch button (between indicator and break)
+    this.newBranchStatusBarItem = vscode.window.createStatusBarItem(
+      vscode.StatusBarAlignment.Left,
+      99.5
+    );
+    this.newBranchStatusBarItem.command = 'toggl-track-auto.createBranch';
+    this.newBranchStatusBarItem.text = '$(git-branch) New Branch';
+    this.newBranchStatusBarItem.tooltip = 'Create a new branch from a Monday.com task';
+    this.newBranchStatusBarItem.show();
     
     // Break button
     this.breakStatusBarItem = vscode.window.createStatusBarItem(
@@ -633,11 +644,13 @@ class TogglTracker {
       const org = await this.getGitRemoteOrg();
       console.log(`Toggl: Repo org "${org || 'unknown'}" not in allowed list, staying silent`);
       this.statusBarItem.hide();
+      this.newBranchStatusBarItem.hide();
       this.breakStatusBarItem.hide();
       return;
     }
 
     this.statusBarItem.show();
+    this.newBranchStatusBarItem.show();
     this.breakStatusBarItem.show();
     this.isTracking = true;
     await this.checkBranch();
@@ -661,9 +674,11 @@ class TogglTracker {
         console.log('Toggl: Workspace changed to non-allowed org, stopping');
         await this.stop();
         this.statusBarItem.hide();
+        this.newBranchStatusBarItem.hide();
         this.breakStatusBarItem.hide();
       } else {
         this.statusBarItem.show();
+        this.newBranchStatusBarItem.show();
         this.breakStatusBarItem.show();
         if (!this.isTracking) {
           await this.start();
@@ -1183,6 +1198,7 @@ class TogglTracker {
     // Fire the stop request (don't await - extension may close before it completes)
     this.stopCurrentEntry().catch(() => {});
     this.statusBarItem.dispose();
+    this.newBranchStatusBarItem.dispose();
     this.breakStatusBarItem.dispose();
   }
 }
