@@ -110,6 +110,7 @@ class TogglTracker {
   private idleCheckInterval: NodeJS.Timeout | null = null;
   private isTracking: boolean = false;
   private taskCache: Map<string, string> = new Map();
+  private taskColumnsCache: Map<string, Record<string, string>> = new Map();
   // Track last stopped entry for resume feature
   private lastStoppedDescription: string = '';
   private lastStoppedTime: number = 0;
@@ -245,6 +246,10 @@ class TogglTracker {
           items(ids: [${ticketId}]) {
             id
             name
+            column_values {
+              id
+              text
+            }
           }
         }
       `;
@@ -262,8 +267,21 @@ class TogglTracker {
 
       const items = response.data?.data?.items;
       if (items && items.length > 0) {
-        const name = items[0].name;
+        const item = items[0];
+        const name = item.name;
         this.taskCache.set(ticketId, name);
+        
+        // Store column values for project/tag mapping
+        if (item.column_values) {
+          const columns: Record<string, string> = {};
+          for (const col of item.column_values) {
+            if (col.text) {
+              columns[col.id] = col.text;
+            }
+          }
+          this.taskColumnsCache.set(ticketId, columns);
+        }
+        
         return name;
       }
     } catch (error) {
@@ -271,6 +289,27 @@ class TogglTracker {
     }
 
     return null;
+  }
+
+  // Map Monday.com category to Toggl project ID
+  private getTogglProjectId(category: string): number | null {
+    const projectMap: Record<string, number> = {
+      'Pay and Punch': 212975617,      // PAY
+      'API': 214129752,                 // API: Clover
+      'Bug': 213182163,                 // Bug
+      'Improvement': 213617327,         // Improvement
+      // Add more mappings as needed
+    };
+    return projectMap[category] || null;
+  }
+
+  // Get Toggl tags from Monday.com label
+  private getTogglTags(label: string): string[] {
+    // Return the label as a tag if present
+    if (label) {
+      return [label];
+    }
+    return [];
   }
 
   private async getCurrentTogglEntry(): Promise<any | null> {
@@ -372,12 +411,13 @@ class TogglTracker {
     const config = this.getConfig();
     const apiToken = config.get<string>('apiToken');
     const workspaceId = config.get<number>('workspaceId');
-    const projectId = config.get<number>('projectId');
+    let projectId = config.get<number>('projectId');
 
     if (!apiToken || !workspaceId) return;
 
     const ticketId = this.extractTicketId(branch);
     let description = branch;
+    let tags: string[] = [];
 
     if (ticketId) {
       const taskName = await this.getMondayTaskName(ticketId);
@@ -385,6 +425,25 @@ class TogglTracker {
       if (taskName) {
         // If we found a task name, just use it (no ID needed)
         description = taskName;
+        
+        // Get column values for project/tag mapping
+        const columns = this.taskColumnsCache.get(ticketId);
+        if (columns) {
+          // Map category to Toggl project (status_1_mkn2ampb is the category column)
+          const category = columns['status_1_mkn2ampb'];
+          if (category) {
+            const mappedProjectId = this.getTogglProjectId(category);
+            if (mappedProjectId) {
+              projectId = mappedProjectId;
+            }
+          }
+          
+          // Map label to Toggl tags (label__1 is the label column)
+          const label = columns['label__1'];
+          if (label) {
+            tags = this.getTogglTags(label);
+          }
+        }
       } else {
         // No task name found, use ID + branch
         description = `[${ticketId}] ${branch}`;
@@ -415,6 +474,7 @@ class TogglTracker {
             created_with: 'toggl-track-vscode',
             billable: true,
             ...(projectId && projectId > 0 ? { project_id: projectId } : {}),
+            ...(tags.length > 0 ? { tags } : {}),
           },
           {
             auth: { username: apiToken, password: 'api_token' },
@@ -438,6 +498,10 @@ class TogglTracker {
 
       if (projectId && projectId > 0) {
         payload.project_id = projectId;
+      }
+
+      if (tags.length > 0) {
+        payload.tags = tags;
       }
 
       const response = await axios.post(
