@@ -122,25 +122,24 @@ async function fetchCurrentMondayUserId(token: string): Promise<number | null> {
 
 async function fetchUserTasks(token: string, boardId: string): Promise<MondayTask[]> {
   try {
-    // Get current user ID
-    const userId = await fetchCurrentMondayUserId(token);
-    if (!userId) {
-      vscode.window.showErrorMessage('Monday.com: Could not determine current user. Check your MONDAY_TOKEN.');
-      return [];
-    }
-
-    // Fetch all items from the board, filtering by person column
+    // Fetch ALL items from the board (no person filter)
     const query = `
       query {
         boards(ids: [${boardId}]) {
-          items_page(limit: 100, query_params: {rules: [{column_id: "person", compare_value: [${userId}]}], operator: and}) {
+          groups {
+            id
+            title
+          }
+          items_page(limit: 200) {
             items {
               id
               name
               group {
+                id
                 title
               }
-              column_values(ids: ["status"]) {
+              column_values(ids: ["person", "status9"]) {
+                id
                 text
               }
             }
@@ -161,17 +160,47 @@ async function fetchUserTasks(token: string, boardId: string): Promise<MondayTas
 
     const items = boards[0].items_page?.items || [];
 
-    // Filter out "Done" items
-    return items
+    // Define open/active group names (these appear at the top)
+    const activeGroups = new Set([
+      'in progress', 'code review', 'ready to be tackled',
+      'deployed to dev', 'changes requires/reopen'
+    ]);
+
+    // Define closed/done group patterns to exclude
+    const doneGroupPatterns = ['done', 'nice to have', 'brainstorm', 'on hold',
+      'missing info', 'dev reference', 'feature upgrade - backlog',
+      'feature upgrade - to plan', 'product below'];
+
+    // Map and sort: active groups first, then the rest
+    const mapped = items
       .filter((item: any) => {
-        const status = item.column_values?.[0]?.text || '';
-        return status.toLowerCase() !== 'done';
+        const groupTitle = (item.group?.title || '').toLowerCase();
+        return !doneGroupPatterns.some(p => groupTitle.includes(p));
       })
-      .map((item: any) => ({
-        id: item.id,
-        name: item.name,
-        boardId,
-      }));
+      .map((item: any) => {
+        const groupTitle = item.group?.title || 'Unknown';
+        const person = item.column_values?.find((c: any) => c.id === 'person')?.text || '';
+        const status = item.column_values?.find((c: any) => c.id === 'status9')?.text || '';
+        const isActive = activeGroups.has(groupTitle.toLowerCase());
+        return {
+          id: item.id,
+          name: item.name,
+          boardId,
+          group: groupTitle,
+          person,
+          status,
+          isActive,
+        };
+      });
+
+    // Sort: active groups first, then alphabetically by group
+    mapped.sort((a: any, b: any) => {
+      if (a.isActive && !b.isActive) return -1;
+      if (!a.isActive && b.isActive) return 1;
+      return a.group.localeCompare(b.group);
+    });
+
+    return mapped;
   } catch (error: any) {
     console.error('Failed to fetch Monday tasks:', error);
     vscode.window.showErrorMessage(`Monday.com API error: ${error.message || 'Unknown error'}`);
@@ -259,20 +288,32 @@ async function createBranchFromTask(): Promise<void> {
   );
 
   if (tasks.length === 0) {
-    vscode.window.showInformationMessage('No open Monday.com tasks found assigned to you.');
+    vscode.window.showInformationMessage('No Monday.com tasks found on the board.');
     return;
   }
 
-  // Show QuickPick
-  const items = tasks.map(task => ({
-    label: task.name,
-    description: `#${task.id}`,
-    task,
-  }));
+  // Show QuickPick with group separators and person info
+  let lastGroup = '';
+  const items: (vscode.QuickPickItem & { task?: any })[] = [];
+  for (const task of tasks) {
+    const group = (task as any).group || 'Unknown';
+    if (group !== lastGroup) {
+      items.push({ label: group, kind: vscode.QuickPickItemKind.Separator } as any);
+      lastGroup = group;
+    }
+    const person = (task as any).person || '';
+    items.push({
+      label: task.name,
+      description: `#${task.id}`,
+      detail: person ? `👤 ${person}` : undefined,
+      task,
+    });
+  }
 
   const selected = await vscode.window.showQuickPick(items, {
     placeHolder: 'Select a Monday.com task to create a branch for',
     matchOnDescription: true,
+    matchOnDetail: true,
   });
 
   if (!selected) return;
