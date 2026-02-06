@@ -103,33 +103,34 @@ function writeBranchTaskMappings(mappings: BranchTaskMapping): void {
   }
 }
 
-async function fetchCurrentMondayUserId(token: string): Promise<number | null> {
+async function fetchCurrentMondayUser(token: string): Promise<{ id: number; name: string } | null> {
   try {
     const response = await axios.post(MONDAY_API_URL, {
-      query: '{ me { id } }',
+      query: '{ me { id name } }',
     }, {
       headers: {
         'Authorization': token,
         'Content-Type': 'application/json',
       },
     });
-    return response.data?.data?.me?.id || null;
+    const me = response.data?.data?.me;
+    return me ? { id: me.id, name: me.name } : null;
   } catch (error) {
-    console.error('Failed to fetch Monday user ID:', error);
+    console.error('Failed to fetch Monday user:', error);
     return null;
   }
 }
 
 async function fetchUserTasks(token: string, boardId: string): Promise<MondayTask[]> {
   try {
+    // Get current user name to prioritize their tasks
+    const currentUser = await fetchCurrentMondayUser(token);
+    const currentUserName = currentUser?.name || '';
+
     // Fetch ALL items from the board (no person filter)
     const query = `
       query {
         boards(ids: [${boardId}]) {
-          groups {
-            id
-            title
-          }
           items_page(limit: 200) {
             items {
               id
@@ -138,7 +139,7 @@ async function fetchUserTasks(token: string, boardId: string): Promise<MondayTas
                 id
                 title
               }
-              column_values(ids: ["person", "status9"]) {
+              column_values(ids: ["person", "status9", "dup__of_priority_mkkassyk"]) {
                 id
                 text
               }
@@ -160,18 +161,26 @@ async function fetchUserTasks(token: string, boardId: string): Promise<MondayTas
 
     const items = boards[0].items_page?.items || [];
 
-    // Define open/active group names (these appear at the top)
-    const activeGroups = new Set([
-      'in progress', 'code review', 'ready to be tackled',
-      'deployed to dev', 'changes requires/reopen'
-    ]);
+    // Define group priority order (lower = higher priority)
+    const groupPriority: Record<string, number> = {
+      'in progress': 1,
+      'code review': 2,
+      'changes requires/reopen': 3,
+      'deployed to dev': 4,
+      'in testing (non production) stephanie': 5,
+      'ready to be tackled': 6,
+      'engineering backlog': 7,
+      'apis backlog': 8,
+      'inbox': 9,
+      'bugs': 10,
+    };
 
     // Define closed/done group patterns to exclude
     const doneGroupPatterns = ['done', 'nice to have', 'brainstorm', 'on hold',
       'missing info', 'dev reference', 'feature upgrade - backlog',
-      'feature upgrade - to plan', 'product below'];
+      'feature upgrade - to plan', 'product below', 'next phase'];
 
-    // Map and sort: active groups first, then the rest
+    // Map items
     const mapped = items
       .filter((item: any) => {
         const groupTitle = (item.group?.title || '').toLowerCase();
@@ -181,7 +190,9 @@ async function fetchUserTasks(token: string, boardId: string): Promise<MondayTas
         const groupTitle = item.group?.title || 'Unknown';
         const person = item.column_values?.find((c: any) => c.id === 'person')?.text || '';
         const status = item.column_values?.find((c: any) => c.id === 'status9')?.text || '';
-        const isActive = activeGroups.has(groupTitle.toLowerCase());
+        const priority = item.column_values?.find((c: any) => c.id === 'dup__of_priority_mkkassyk')?.text || '';
+        const isCurrentUser = currentUserName && person.toLowerCase().includes(currentUserName.toLowerCase());
+        const gPriority = groupPriority[groupTitle.toLowerCase()] || 99;
         return {
           id: item.id,
           name: item.name,
@@ -189,15 +200,18 @@ async function fetchUserTasks(token: string, boardId: string): Promise<MondayTas
           group: groupTitle,
           person,
           status,
-          isActive,
+          priority,
+          isCurrentUser,
+          gPriority,
         };
       });
 
-    // Sort: active groups first, then alphabetically by group
+    // Sort: current user's tasks first, then by group priority
     mapped.sort((a: any, b: any) => {
-      if (a.isActive && !b.isActive) return -1;
-      if (!a.isActive && b.isActive) return 1;
-      return a.group.localeCompare(b.group);
+      if (a.isCurrentUser && !b.isCurrentUser) return -1;
+      if (!a.isCurrentUser && b.isCurrentUser) return 1;
+      if (a.gPriority !== b.gPriority) return a.gPriority - b.gPriority;
+      return 0;
     });
 
     return mapped;
@@ -292,19 +306,33 @@ async function createBranchFromTask(): Promise<void> {
     return;
   }
 
-  // Show QuickPick with group separators and person info
+  // Show QuickPick with group separators, status, and person info
   let lastGroup = '';
   const items: (vscode.QuickPickItem & { task?: any })[] = [];
   for (const task of tasks) {
     const group = (task as any).group || 'Unknown';
-    if (group !== lastGroup) {
-      items.push({ label: group, kind: vscode.QuickPickItemKind.Separator } as any);
-      lastGroup = group;
+    const isCurrentUser = (task as any).isCurrentUser;
+    const sectionLabel = isCurrentUser && lastGroup !== `⭐ Your Tasks — ${group}` 
+      ? `⭐ Your Tasks — ${group}` 
+      : !isCurrentUser && (lastGroup.startsWith('⭐') || lastGroup !== group) 
+        ? group 
+        : '';
+    
+    if (sectionLabel && sectionLabel !== lastGroup) {
+      items.push({ label: sectionLabel, kind: vscode.QuickPickItemKind.Separator } as any);
+      lastGroup = sectionLabel;
     }
     const person = (task as any).person || '';
+    const status = (task as any).status || '';
+    const priority = (task as any).priority || '';
+    const priorityTag = priority ? priority.split(' - ')[0] : '';
+    const descParts = [`#${task.id}`];
+    if (status) descParts.push(status);
+    if (priorityTag) descParts.push(priorityTag);
+
     items.push({
-      label: task.name,
-      description: `#${task.id}`,
+      label: `${isCurrentUser ? '$(star-full) ' : ''}${task.name}`,
+      description: descParts.join('  ·  '),
       detail: person ? `👤 ${person}` : undefined,
       task,
     });
