@@ -321,10 +321,22 @@ class TogglTracker {
       
       // Find most recent entry with matching description (stopped, not running)
       const entries = response.data || [];
-      const matchingEntry = entries.find((e: any) => 
+      // Try exact match first, then fuzzy match (starts with same text)
+      let matchingEntry = entries.find((e: any) => 
         e.description === description && e.duration >= 0
       );
       
+      // If no exact match, try matching by task name similarity
+      if (!matchingEntry) {
+        matchingEntry = entries.find((e: any) => 
+          e.duration >= 0 && e.description && description && (
+            e.description.startsWith(description.substring(0, 30)) ||
+            description.startsWith(e.description.substring(0, 30))
+          )
+        );
+      }
+      
+      console.log(`Looking for: "${description}", found: "${matchingEntry?.description}"`);
       return matchingEntry || null;
     } catch (error) {
       console.error('Failed to fetch previous Toggl entries:', error);
