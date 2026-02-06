@@ -545,7 +545,18 @@ class TogglTracker {
   }
 
   dispose() {
-    this.stop();
+    // Stop tracking and timer synchronously as much as possible
+    this.isTracking = false;
+    if (this.checkInterval) {
+      clearInterval(this.checkInterval);
+      this.checkInterval = null;
+    }
+    if (this.idleCheckInterval) {
+      clearInterval(this.idleCheckInterval);
+      this.idleCheckInterval = null;
+    }
+    // Fire the stop request (don't await - extension may close before it completes)
+    this.stopCurrentEntry().catch(() => {});
     this.statusBarItem.dispose();
   }
 }
@@ -566,6 +577,9 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     })
   );
+
+  // Add tracker to subscriptions for proper disposal
+  context.subscriptions.push(tracker);
 
   // Check if setup is needed
   const config = vscode.workspace.getConfiguration('togglTrackAuto');
