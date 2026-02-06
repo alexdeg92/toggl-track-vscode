@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import axios from 'axios';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -565,8 +566,68 @@ class TogglTracker {
 
 let tracker: TogglTracker;
 
+const GITHUB_REPO = 'alexdeg92/toggl-track-vscode';
+
+async function checkForUpdates(context: vscode.ExtensionContext) {
+  try {
+    const extension = vscode.extensions.getExtension('toggl-track-auto.toggl-track-auto');
+    const currentVersion = extension?.packageJSON?.version || '0.0.0';
+    
+    const response = await axios.get(
+      `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
+      { headers: { 'Accept': 'application/vnd.github.v3+json' } }
+    );
+    
+    const latestVersion = response.data.tag_name?.replace('v', '') || '0.0.0';
+    const vsixAsset = response.data.assets?.find((a: any) => a.name.endsWith('.vsix'));
+    
+    if (latestVersion > currentVersion && vsixAsset) {
+      const action = await vscode.window.showInformationMessage(
+        `Toggl Track Auto v${latestVersion} is available (you have v${currentVersion})`,
+        'Download & Install',
+        'Later'
+      );
+      
+      if (action === 'Download & Install') {
+        // Download the VSIX
+        const downloadPath = path.join(context.globalStorageUri.fsPath, vsixAsset.name);
+        await vscode.workspace.fs.createDirectory(context.globalStorageUri);
+        
+        const vsixResponse = await axios.get(vsixAsset.browser_download_url, {
+          responseType: 'arraybuffer'
+        });
+        
+        await vscode.workspace.fs.writeFile(
+          vscode.Uri.file(downloadPath),
+          new Uint8Array(vsixResponse.data)
+        );
+        
+        // Install the extension
+        await vscode.commands.executeCommand(
+          'workbench.extensions.installExtension',
+          vscode.Uri.file(downloadPath)
+        );
+        
+        const reload = await vscode.window.showInformationMessage(
+          `Toggl Track Auto v${latestVersion} installed! Reload to activate.`,
+          'Reload Now'
+        );
+        
+        if (reload === 'Reload Now') {
+          await vscode.commands.executeCommand('workbench.action.reloadWindow');
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Failed to check for updates:', error);
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext) {
   tracker = new TogglTracker();
+  
+  // Check for updates on startup (after 5 seconds to not slow down activation)
+  setTimeout(() => checkForUpdates(context), 5000);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('toggl-track-auto.start', () => tracker.start()),
