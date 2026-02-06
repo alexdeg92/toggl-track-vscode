@@ -318,14 +318,12 @@ class TogglTracker {
 
     if (ticketId) {
       const taskName = await this.getMondayTaskName(ticketId);
-      const format = config.get<string>('entryFormat') || '[{ticket_id}] {task_name}';
       
       if (taskName) {
-        description = format
-          .replace('{ticket_id}', ticketId)
-          .replace('{task_name}', taskName)
-          .replace('{branch}', branch);
+        // If we found a task name, just use it (no ID needed)
+        description = taskName;
       } else {
+        // No task name found, use ID + branch
         description = `[${ticketId}] ${branch}`;
       }
     }
