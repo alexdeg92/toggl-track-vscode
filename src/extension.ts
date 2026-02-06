@@ -5,8 +5,10 @@ import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
-// Pivot shared Monday.com API token (read-only access to SPRINTS DEV board)
-const PIVOT_MONDAY_TOKEN = 'eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOjYxNTUxMDYwMiwiYWFpIjoxMSwidWlkIjo5NjM0OTU1MiwiaWFkIjoiMjAyNi0wMi0wMlQyMTowOTowMy44OTBaIiwicGVyIjoibWU6d3JpdGUiLCJhY3RpZCI6MTYwOTA4MTMsInJnbiI6InVzZTEifQ.V3saTkap4jx2pjGYZ3H38pEqFpnaKmgfhgd-5ZskdDQ';
+// Monday.com API token - must be set via MONDAY_TOKEN env var or settings
+function getMondayToken(): string {
+  return process.env.MONDAY_TOKEN || vscode.workspace.getConfiguration('togglTrackAuto').get<string>('mondayToken') || '';
+}
 
 async function runSetupWizard(): Promise<boolean> {
   const config = vscode.workspace.getConfiguration('togglTrackAuto');
@@ -70,9 +72,14 @@ async function runSetupWizard(): Promise<boolean> {
     return false;
   }
 
-  // Auto-configure Monday.com with Pivot shared token
-  await config.update('mondayApiToken', PIVOT_MONDAY_TOKEN, vscode.ConfigurationTarget.Global);
-  vscode.window.showInformationMessage('✅ Monday.com integration auto-configured!');
+  // Monday.com integration - users should set MONDAY_TOKEN env var or configure in settings
+  const mondayToken = getMondayToken();
+  if (mondayToken) {
+    await config.update('mondayApiToken', mondayToken, vscode.ConfigurationTarget.Global);
+    vscode.window.showInformationMessage('✅ Monday.com integration configured from environment!');
+  } else {
+    vscode.window.showWarningMessage('⚠️ Set MONDAY_TOKEN env var for Monday.com integration');
+  }
 
   vscode.window.showInformationMessage(
     '🎉 Setup complete! Toggl will now auto-track based on your git branch.'
@@ -213,7 +220,7 @@ class TogglTracker {
     }
 
     const config = this.getConfig();
-    const mondayToken = config.get<string>('mondayApiToken') || PIVOT_MONDAY_TOKEN;
+    const mondayToken = config.get<string>('mondayApiToken') || getMondayToken();
 
     try {
       const query = `
