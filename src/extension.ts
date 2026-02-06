@@ -5,6 +5,9 @@ import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
+// Pivot shared Monday.com API token (read-only access to SPRINTS DEV board)
+const PIVOT_MONDAY_TOKEN = 'eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOjYxNTUxMDYwMiwiYWFpIjoxMSwidWlkIjo5NjM0OTU1MiwiaWFkIjoiMjAyNi0wMi0wMlQyMTowOTowMy44OTBaIiwicGVyIjoibWU6d3JpdGUiLCJhY3RpZCI6MTYwOTA4MTMsInJnbiI6InVzZTEifQ.V3saTkap4jx2pjGYZ3H38pEqFpnaKmgfhgd-5ZskdDQ';
+
 async function runSetupWizard(): Promise<boolean> {
   const config = vscode.workspace.getConfiguration('togglTrackAuto');
   
@@ -67,36 +70,9 @@ async function runSetupWizard(): Promise<boolean> {
     return false;
   }
 
-  // Step 2: Monday.com (optional)
-  const mondaySetup = await vscode.window.showInformationMessage(
-    '📋 Step 2 (Optional): Add Monday.com integration for task names?',
-    'Yes, add Monday.com',
-    'Skip'
-  );
-
-  if (mondaySetup === 'Yes, add Monday.com') {
-    const mondayInfo = await vscode.window.showInformationMessage(
-      'Get your Monday.com API token from: monday.com → Profile → Admin → API',
-      'Open Monday.com',
-      'I have it'
-    );
-
-    if (mondayInfo === 'Open Monday.com') {
-      vscode.env.openExternal(vscode.Uri.parse('https://monday.com'));
-    }
-
-    const mondayToken = await vscode.window.showInputBox({
-      prompt: 'Enter your Monday.com API token (or leave empty to skip)',
-      placeHolder: 'eyJhbGciOiJIUzI1NiJ9...',
-      password: true,
-      ignoreFocusOut: true,
-    });
-
-    if (mondayToken) {
-      await config.update('mondayApiToken', mondayToken, vscode.ConfigurationTarget.Global);
-      vscode.window.showInformationMessage('✅ Monday.com integration added!');
-    }
-  }
+  // Auto-configure Monday.com with Pivot shared token
+  await config.update('mondayApiToken', PIVOT_MONDAY_TOKEN, vscode.ConfigurationTarget.Global);
+  vscode.window.showInformationMessage('✅ Monday.com integration auto-configured!');
 
   vscode.window.showInformationMessage(
     '🎉 Setup complete! Toggl will now auto-track based on your git branch.'
@@ -237,11 +213,7 @@ class TogglTracker {
     }
 
     const config = this.getConfig();
-    const mondayToken = config.get<string>('mondayApiToken');
-    
-    if (!mondayToken) {
-      return null;
-    }
+    const mondayToken = config.get<string>('mondayApiToken') || PIVOT_MONDAY_TOKEN;
 
     try {
       const query = `
