@@ -122,6 +122,9 @@ class TogglTracker {
   private preBreakEntryId: number | null = null;
   private preBreakDescription: string = '';
   private preBreakBranch: string = '';
+  // Org filtering
+  private isOrgAllowed: boolean = false;
+  private lastCheckedOrgFolder: string = '';
 
   constructor() {
     this.statusBarItem = vscode.window.createStatusBarItem(
@@ -168,6 +171,74 @@ class TogglTracker {
     this.statusBarItem.text = text;
   }
 
+  /**
+   * Extract the GitHub org/user from the git remote URL of the current workspace.
+   * Supports both SSH (git@github.com:org/repo.git) and HTTPS (https://github.com/org/repo.git).
+   */
+  private async getGitRemoteOrg(): Promise<string | null> {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders || workspaceFolders.length === 0) {
+      return null;
+    }
+
+    try {
+      const { stdout } = await execAsync('git remote get-url origin', {
+        cwd: workspaceFolders[0].uri.fsPath,
+      });
+      const url = stdout.trim();
+
+      // SSH format: git@github.com:org/repo.git
+      const sshMatch = url.match(/git@github\.com:([^/]+)\//);
+      if (sshMatch) return sshMatch[1].toLowerCase();
+
+      // HTTPS format: https://github.com/org/repo.git
+      const httpsMatch = url.match(/github\.com\/([^/]+)\//);
+      if (httpsMatch) return httpsMatch[1].toLowerCase();
+
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Check if the current repo belongs to one of the allowed GitHub organizations.
+   * Caches the result per workspace folder to avoid repeated git calls.
+   * Returns true if allowedOrgs is empty (no filtering).
+   */
+  private async checkOrgAllowed(): Promise<boolean> {
+    const config = this.getConfig();
+    const allowedOrgs = config.get<string[]>('allowedOrgs') || [];
+
+    // Empty list = no filtering, allow all
+    if (allowedOrgs.length === 0) {
+      this.isOrgAllowed = true;
+      return true;
+    }
+
+    // Cache per workspace folder path
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const currentFolder = workspaceFolders?.[0]?.uri.fsPath || '';
+    
+    if (currentFolder && currentFolder === this.lastCheckedOrgFolder) {
+      return this.isOrgAllowed;
+    }
+
+    this.lastCheckedOrgFolder = currentFolder;
+    const org = await this.getGitRemoteOrg();
+
+    if (!org) {
+      this.isOrgAllowed = false;
+      return false;
+    }
+
+    this.isOrgAllowed = allowedOrgs.some(
+      (allowed) => allowed.toLowerCase() === org
+    );
+
+    return this.isOrgAllowed;
+  }
+
   async start() {
     const config = this.getConfig();
     if (!config.get<boolean>('enabled')) {
@@ -184,6 +255,18 @@ class TogglTracker {
       return;
     }
 
+    // Check if the current repo belongs to an allowed org
+    const orgAllowed = await this.checkOrgAllowed();
+    if (!orgAllowed) {
+      const org = await this.getGitRemoteOrg();
+      console.log(`Toggl: Repo org "${org || 'unknown'}" not in allowed list, staying silent`);
+      this.statusBarItem.hide();
+      this.breakStatusBarItem.hide();
+      return;
+    }
+
+    this.statusBarItem.show();
+    this.breakStatusBarItem.show();
     this.isTracking = true;
     await this.checkBranch();
 
@@ -197,6 +280,24 @@ class TogglTracker {
     vscode.workspace.onDidChangeTextDocument(() => this.onActivity());
     vscode.window.onDidChangeActiveTextEditor(() => this.onActivity());
     vscode.window.onDidChangeTextEditorSelection(() => this.onActivity());
+
+    // Re-check org when workspace folders change
+    vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+      this.lastCheckedOrgFolder = ''; // Reset cache
+      const allowed = await this.checkOrgAllowed();
+      if (!allowed) {
+        console.log('Toggl: Workspace changed to non-allowed org, stopping');
+        await this.stop();
+        this.statusBarItem.hide();
+        this.breakStatusBarItem.hide();
+      } else {
+        this.statusBarItem.show();
+        this.breakStatusBarItem.show();
+        if (!this.isTracking) {
+          await this.start();
+        }
+      }
+    });
 
     // Handle window focus - focused window takes over Toggl
     vscode.window.onDidChangeWindowState(async (state) => {

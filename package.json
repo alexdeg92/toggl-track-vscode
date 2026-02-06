@@ -2,7 +2,7 @@
   "name": "toggl-track-auto",
   "displayName": "Toggl Track Auto",
   "description": "Automatically track time in Toggl based on your git branch and Monday.com tickets",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "publisher": "pivot",
   "repository": {
     "type": "git",
@@ -88,6 +88,14 @@
           "type": "number",
           "default": 0,
           "description": "Toggl project ID to use (0 for no project)"
+        },
+        "togglTrackAuto.allowedOrgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["pivotteam"],
+          "description": "Only track time for repos belonging to these GitHub organizations. Empty array = track all repos."
         }
       }
     }
