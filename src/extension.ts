@@ -9,7 +9,7 @@ const execAsync = promisify(exec);
 
 // Monday.com API token - must be set via MONDAY_TOKEN env var or settings
 function getMondayToken(): string {
-  return process.env.MONDAY_TOKEN || vscode.workspace.getConfiguration('togglTrackAuto').get<string>('mondayApiToken') || vscode.workspace.getConfiguration('togglTrackAuto').get<string>('mondayToken') || '';
+  return vscode.workspace.getConfiguration('togglTrackAuto').get<string>('mondayApiToken') || process.env.MONDAY_TOKEN || '';
 }
 
 // ========== Monday.com Task Integration ==========
