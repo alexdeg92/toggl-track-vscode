@@ -164,15 +164,16 @@ class TogglTracker {
     vscode.window.onDidChangeActiveTextEditor(() => this.onActivity());
     vscode.window.onDidChangeTextEditorSelection(() => this.onActivity());
 
-    // Handle window focus - only active window manages Toggl
-    vscode.window.onDidChangeWindowState((state) => {
-      if (state.focused) {
-        console.log('Window focused - taking over Toggl management');
-        this.checkBranch(); // Re-check and take over
-      } else {
-        console.log('Window lost focus - pausing Toggl management');
-        // Don't stop the timer, just pause local management
-        // The focused window will take over
+    // Handle window focus - focused window takes over Toggl
+    vscode.window.onDidChangeWindowState(async (state) => {
+      if (state.focused && this.isTracking) {
+        console.log('Window focused - taking over Toggl tracking');
+        // Force switch to this window's branch
+        const branch = await this.getCurrentBranch();
+        if (branch && branch !== this.currentBranch) {
+          this.currentBranch = ''; // Force restart
+          await this.checkBranch();
+        }
       }
     });
   }
@@ -342,25 +343,12 @@ class TogglTracker {
       return;
     }
 
-    // Sync with current Toggl state (handles multi-window scenarios)
+    // Sync local state with Toggl (but don't prevent switching)
     const currentTogglEntry = await this.getCurrentTogglEntry();
     if (currentTogglEntry && currentTogglEntry.id) {
-      // There's already a running timer - adopt it if we don't have one
-      if (!this.currentEntryId) {
-        this.currentEntryId = currentTogglEntry.id;
-        this.currentDescription = currentTogglEntry.description || '';
-        this.updateStatusBar(`$(clock) Toggl: ${this.currentDescription.substring(0, 30)}...`);
-      }
-      // If the running timer matches our branch context, we're good
-      // If not, another window is controlling it - don't interfere
-      if (this.currentEntryId !== currentTogglEntry.id) {
-        // Another window started a different timer - sync to it
-        this.currentEntryId = currentTogglEntry.id;
-        this.currentDescription = currentTogglEntry.description || '';
-        this.currentBranch = branch; // Avoid restarting
-        this.updateStatusBar(`$(clock) Toggl: ${this.currentDescription.substring(0, 30)}...`);
-        return;
-      }
+      // Track what Toggl is currently running
+      this.currentEntryId = currentTogglEntry.id;
+      this.currentDescription = currentTogglEntry.description || '';
     }
 
     // Resume tracking if we were idle
