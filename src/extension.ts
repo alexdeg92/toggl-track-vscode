@@ -570,7 +570,7 @@ const GITHUB_REPO = 'alexdeg92/toggl-track-vscode';
 
 async function checkForUpdates(context: vscode.ExtensionContext) {
   try {
-    const extension = vscode.extensions.getExtension('toggl-track-auto.toggl-track-auto');
+    const extension = vscode.extensions.getExtension('pivot.toggl-track-auto');
     const currentVersion = extension?.packageJSON?.version || '0.0.0';
     
     const response = await axios.get(
