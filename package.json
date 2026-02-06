@@ -2,7 +2,7 @@
   "name": "toggl-track-auto",
   "displayName": "Toggl Track Auto",
   "description": "Automatically track time in Toggl based on your git branch and Monday.com tickets",
-  "version": "0.19.1",
+  "version": "0.20.0",
   "publisher": "pivot",
   "repository": {
     "type": "git",
@@ -47,6 +47,29 @@
       {
         "command": "toggl-track-auto.copyMondayTaskLink",
         "title": "Toggl: Copy Monday Task Link"
+      },
+      {
+        "command": "toggl-track-auto.refreshTaskContext",
+        "title": "Toggl: Refresh Task Context"
+      },
+      {
+        "command": "toggl-track-auto.refreshMondaySidebar",
+        "title": "Toggl: Refresh Monday Sidebar"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "togglMondayTask",
+          "name": "Monday.com Task",
+          "when": "togglMondayTask.visible"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "togglMondayTask",
+        "contents": "No Monday.com task linked to the current branch.\n[Create Branch from Task](command:toggl-track-auto.createBranchFromTask)"
       }
     ],
     "configuration": {

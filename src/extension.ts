@@ -32,6 +32,36 @@ interface BranchTaskMapping {
   };
 }
 
+// ========== Monday.com Detailed Task Types ==========
+
+interface MondayColumnValue {
+  id: string;
+  title: string;
+  text: string;
+}
+
+interface MondayUpdate {
+  text_body: string;
+  created_at: string;
+  creator: { name: string };
+}
+
+interface MondaySubItem {
+  id: string;
+  name: string;
+  column_values: MondayColumnValue[];
+}
+
+interface MondayDetailedTask {
+  id: string;
+  name: string;
+  group: { title: string };
+  column_values: MondayColumnValue[];
+  updates: MondayUpdate[];
+  subitems: MondaySubItem[];
+  boardId: string;
+}
+
 function getMondayBoardId(): string {
   return vscode.workspace.getConfiguration('togglTrackAuto').get<string>('mondayBoardId') || '4176868787';
 }
@@ -86,22 +116,550 @@ function writeBranchTaskMappings(mappings: BranchTaskMapping): void {
   // Ensure .vscode/monday-tasks.json is in .gitignore
   const root = getWorkspaceRoot();
   if (root) {
-    const gitignorePath = path.join(root, '.gitignore');
-    const entry = '.vscode/monday-tasks.json';
-    try {
-      let content = '';
-      if (fs.existsSync(gitignorePath)) {
-        content = fs.readFileSync(gitignorePath, 'utf-8');
-      }
-      if (!content.includes(entry)) {
-        const newline = content.endsWith('\n') ? '' : '\n';
-        fs.writeFileSync(gitignorePath, content + newline + entry + '\n');
-      }
-    } catch {
-      // best effort
-    }
+    ensureGitignoreEntry(root, '.vscode/monday-tasks.json');
   }
 }
+
+function ensureGitignoreEntry(root: string, entry: string): void {
+  const gitignorePath = path.join(root, '.gitignore');
+  try {
+    let content = '';
+    if (fs.existsSync(gitignorePath)) {
+      content = fs.readFileSync(gitignorePath, 'utf-8');
+    }
+    if (!content.includes(entry)) {
+      const newline = content.endsWith('\n') ? '' : '\n';
+      fs.writeFileSync(gitignorePath, content + newline + entry + '\n');
+    }
+  } catch {
+    // best effort
+  }
+}
+
+// ========== Fetch Detailed Monday Task ==========
+
+async function fetchDetailedMondayTask(taskId: string): Promise<MondayDetailedTask | null> {
+  const token = getMondayToken();
+  if (!token) return null;
+
+  try {
+    const query = `
+      query {
+        items(ids: [${taskId}]) {
+          id
+          name
+          group { title }
+          column_values {
+            id
+            title
+            text
+          }
+          updates(limit: 5) {
+            text_body
+            created_at
+            creator { name }
+          }
+          subitems {
+            id
+            name
+            column_values {
+              id
+              title
+              text
+            }
+          }
+        }
+      }
+    `;
+
+    const response = await axios.post(MONDAY_API_URL, { query }, {
+      headers: {
+        'Authorization': token,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const items = response.data?.data?.items;
+    if (!items || items.length === 0) return null;
+
+    const item = items[0];
+    return {
+      ...item,
+      boardId: getMondayBoardId(),
+    };
+  } catch (error) {
+    console.error('Failed to fetch detailed Monday task:', error);
+    return null;
+  }
+}
+
+// ========== Extract task ID from branch ==========
+
+function extractTaskIdFromBranch(branch: string): string | null {
+  const config = vscode.workspace.getConfiguration('togglTrackAuto');
+  const pattern = config.get<string>('branchPattern') || '(\\d{6,})';
+  const regex = new RegExp(pattern);
+  const match = branch.match(regex);
+  return match ? match[1] : null;
+}
+
+async function getCurrentBranchName(): Promise<string | null> {
+  const root = getWorkspaceRoot();
+  if (!root) return null;
+  try {
+    const { stdout } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: root });
+    return stdout.trim();
+  } catch {
+    return null;
+  }
+}
+
+function resolveTaskIdForBranch(branch: string): string | null {
+  // First try branch name pattern
+  const fromBranch = extractTaskIdFromBranch(branch);
+  if (fromBranch) return fromBranch;
+
+  // Fallback: check .vscode/monday-tasks.json mapping
+  const mappings = readBranchTaskMappings();
+  const mapping = mappings[branch];
+  if (mapping?.taskId) return mapping.taskId;
+
+  return null;
+}
+
+// ========== Helper: get column value ==========
+
+function getColumnValue(task: MondayDetailedTask, titleOrId: string): string {
+  const col = task.column_values.find(
+    c => c.id === titleOrId || c.title.toLowerCase() === titleOrId.toLowerCase()
+  );
+  return col?.text || '';
+}
+
+// ========== Monday.com Task TreeView ==========
+
+class MondayTaskItem extends vscode.TreeItem {
+  constructor(
+    public readonly label: string,
+    public readonly collapsibleState: vscode.TreeItemCollapsibleState,
+    public readonly children?: MondayTaskItem[],
+    options?: {
+      description?: string;
+      tooltip?: string;
+      iconPath?: vscode.ThemeIcon;
+      command?: vscode.Command;
+      contextValue?: string;
+    }
+  ) {
+    super(label, collapsibleState);
+    if (options?.description) this.description = options.description;
+    if (options?.tooltip) this.tooltip = options.tooltip;
+    if (options?.iconPath) this.iconPath = options.iconPath;
+    if (options?.command) this.command = options.command;
+    if (options?.contextValue) this.contextValue = options.contextValue;
+  }
+}
+
+class MondayTaskTreeProvider implements vscode.TreeDataProvider<MondayTaskItem> {
+  private _onDidChangeTreeData = new vscode.EventEmitter<MondayTaskItem | undefined | void>();
+  readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+
+  private task: MondayDetailedTask | null = null;
+  private taskUrl: string = '';
+  private noTaskLinked: boolean = true;
+
+  refresh(): void {
+    this._onDidChangeTreeData.fire();
+  }
+
+  setTask(task: MondayDetailedTask | null, url: string): void {
+    this.task = task;
+    this.taskUrl = url;
+    this.noTaskLinked = !task;
+    this.refresh();
+  }
+
+  setNoTask(): void {
+    this.task = null;
+    this.taskUrl = '';
+    this.noTaskLinked = true;
+    this.refresh();
+  }
+
+  getTreeItem(element: MondayTaskItem): vscode.TreeItem {
+    return element;
+  }
+
+  getChildren(element?: MondayTaskItem): MondayTaskItem[] {
+    if (!this.task) {
+      if (this.noTaskLinked) {
+        return []; // Will show the welcome content
+      }
+      return [];
+    }
+
+    // If we have a parent element, return its children
+    if (element) {
+      return element.children || [];
+    }
+
+    // Root level items
+    const items: MondayTaskItem[] = [];
+    const task = this.task;
+
+    // Task name (header)
+    items.push(new MondayTaskItem(
+      task.name,
+      vscode.TreeItemCollapsibleState.None,
+      undefined,
+      {
+        description: `#${task.id}`,
+        iconPath: new vscode.ThemeIcon('tasklist'),
+        tooltip: task.name,
+      }
+    ));
+
+    // Status
+    const status = getColumnValue(task, 'status9') || getColumnValue(task, 'Status') || getColumnValue(task, 'status');
+    if (status) {
+      items.push(new MondayTaskItem(
+        'Status',
+        vscode.TreeItemCollapsibleState.None,
+        undefined,
+        {
+          description: status,
+          iconPath: new vscode.ThemeIcon('circle-filled'),
+        }
+      ));
+    }
+
+    // Priority
+    const priority = getColumnValue(task, 'dup__of_priority_mkkassyk') || getColumnValue(task, 'Priority') || getColumnValue(task, 'priority');
+    if (priority) {
+      items.push(new MondayTaskItem(
+        'Priority',
+        vscode.TreeItemCollapsibleState.None,
+        undefined,
+        {
+          description: priority,
+          iconPath: new vscode.ThemeIcon('flame'),
+        }
+      ));
+    }
+
+    // Assigned person(s)
+    const person = getColumnValue(task, 'person') || getColumnValue(task, 'Person') || getColumnValue(task, 'people');
+    if (person) {
+      items.push(new MondayTaskItem(
+        'Assigned',
+        vscode.TreeItemCollapsibleState.None,
+        undefined,
+        {
+          description: person,
+          iconPath: new vscode.ThemeIcon('person'),
+        }
+      ));
+    }
+
+    // Group
+    if (task.group?.title) {
+      items.push(new MondayTaskItem(
+        'Group',
+        vscode.TreeItemCollapsibleState.None,
+        undefined,
+        {
+          description: task.group.title,
+          iconPath: new vscode.ThemeIcon('folder'),
+        }
+      ));
+    }
+
+    // Description (from column_values - look for long text or text columns)
+    const descriptionCol = task.column_values.find(
+      c => c.id === 'long_text' || c.id === 'text' || c.title.toLowerCase().includes('description') || c.title.toLowerCase().includes('notes')
+    );
+    if (descriptionCol?.text) {
+      const lines = descriptionCol.text.split('\n').filter(l => l.trim());
+      const descChildren = lines.map(line =>
+        new MondayTaskItem(
+          line.substring(0, 120),
+          vscode.TreeItemCollapsibleState.None,
+          undefined,
+          { tooltip: line }
+        )
+      );
+      items.push(new MondayTaskItem(
+        'Description',
+        vscode.TreeItemCollapsibleState.Collapsed,
+        descChildren,
+        { iconPath: new vscode.ThemeIcon('note') }
+      ));
+    }
+
+    // Updates
+    if (task.updates && task.updates.length > 0) {
+      const updateChildren = task.updates.map(update => {
+        const date = new Date(update.created_at).toLocaleDateString();
+        const author = update.creator?.name || 'Unknown';
+        const preview = (update.text_body || '').substring(0, 100).replace(/\n/g, ' ');
+        return new MondayTaskItem(
+          `${author} — ${date}`,
+          vscode.TreeItemCollapsibleState.None,
+          undefined,
+          {
+            description: preview,
+            tooltip: update.text_body || '',
+            iconPath: new vscode.ThemeIcon('comment'),
+          }
+        );
+      });
+      items.push(new MondayTaskItem(
+        'Updates',
+        vscode.TreeItemCollapsibleState.Collapsed,
+        updateChildren,
+        {
+          description: `(${task.updates.length})`,
+          iconPath: new vscode.ThemeIcon('comment-discussion'),
+        }
+      ));
+    }
+
+    // Sub-items
+    if (task.subitems && task.subitems.length > 0) {
+      const subChildren = task.subitems.map(sub => {
+        const subStatus = sub.column_values.find(
+          c => c.id.includes('status') || c.title.toLowerCase() === 'status'
+        )?.text || '';
+        const isDone = subStatus.toLowerCase().includes('done') || subStatus.toLowerCase().includes('complete');
+        return new MondayTaskItem(
+          sub.name,
+          vscode.TreeItemCollapsibleState.None,
+          undefined,
+          {
+            description: subStatus,
+            iconPath: new vscode.ThemeIcon(isDone ? 'pass-filled' : 'circle-outline'),
+            tooltip: `${sub.name} — ${subStatus}`,
+          }
+        );
+      });
+      items.push(new MondayTaskItem(
+        'Sub-items',
+        vscode.TreeItemCollapsibleState.Expanded,
+        subChildren,
+        {
+          description: `(${task.subitems.length})`,
+          iconPath: new vscode.ThemeIcon('list-tree'),
+        }
+      ));
+    }
+
+    // Link to Monday.com
+    if (this.taskUrl) {
+      items.push(new MondayTaskItem(
+        'Open in Monday.com',
+        vscode.TreeItemCollapsibleState.None,
+        undefined,
+        {
+          iconPath: new vscode.ThemeIcon('link-external'),
+          command: {
+            command: 'vscode.open',
+            title: 'Open in Monday.com',
+            arguments: [vscode.Uri.parse(this.taskUrl)],
+          },
+        }
+      ));
+    }
+
+    return items;
+  }
+}
+
+// ========== AI Context Files ==========
+
+function generateTaskMarkdown(task: MondayDetailedTask, url: string): string {
+  const status = getColumnValue(task, 'status9') || getColumnValue(task, 'Status') || getColumnValue(task, 'status') || 'Unknown';
+  const priority = getColumnValue(task, 'dup__of_priority_mkkassyk') || getColumnValue(task, 'Priority') || getColumnValue(task, 'priority') || 'Unknown';
+  const person = getColumnValue(task, 'person') || getColumnValue(task, 'Person') || getColumnValue(task, 'people') || 'Unassigned';
+  const group = task.group?.title || 'Unknown';
+
+  // Description from column values
+  const descriptionCol = task.column_values.find(
+    c => c.id === 'long_text' || c.id === 'text' || c.title.toLowerCase().includes('description') || c.title.toLowerCase().includes('notes')
+  );
+  const description = descriptionCol?.text || '';
+
+  let md = `# Task: ${task.name}\n\n`;
+  md += `**ID:** ${task.id}\n`;
+  md += `**Status:** ${status}\n`;
+  md += `**Priority:** ${priority}\n`;
+  md += `**Assigned:** ${person}\n`;
+  md += `**Group:** ${group}\n`;
+  md += `**Monday URL:** ${url}\n`;
+
+  if (description) {
+    md += `\n## Description\n\n${description}\n`;
+  }
+
+  if (task.updates && task.updates.length > 0) {
+    md += `\n## Updates\n`;
+    for (const update of task.updates) {
+      const date = new Date(update.created_at).toLocaleDateString();
+      const author = update.creator?.name || 'Unknown';
+      md += `\n### ${author} — ${date}\n\n${update.text_body || '(no text)'}\n`;
+    }
+  }
+
+  if (task.subitems && task.subitems.length > 0) {
+    md += `\n## Sub-items\n\n`;
+    for (const sub of task.subitems) {
+      const subStatus = sub.column_values.find(
+        c => c.id.includes('status') || c.title.toLowerCase() === 'status'
+      )?.text || '';
+      const isDone = subStatus.toLowerCase().includes('done') || subStatus.toLowerCase().includes('complete');
+      md += `- [${isDone ? 'x' : ' '}] ${sub.name} (${subStatus || 'No status'})\n`;
+    }
+  }
+
+  return md;
+}
+
+function generateContextMarkdown(task: MondayDetailedTask, url: string): string {
+  const descriptionCol = task.column_values.find(
+    c => c.id === 'long_text' || c.id === 'text' || c.title.toLowerCase().includes('description') || c.title.toLowerCase().includes('notes')
+  );
+  const description = descriptionCol?.text || 'No description available.';
+
+  // Extract requirements from updates
+  let requirements = '';
+  if (task.updates && task.updates.length > 0) {
+    const updateTexts = task.updates
+      .map(u => u.text_body)
+      .filter(Boolean)
+      .join('\n\n');
+    if (updateTexts) {
+      requirements = updateTexts;
+    }
+  }
+
+  let md = `# Monday.com Task Context\n\n`;
+  md += `You are working on: ${task.name}\n`;
+  md += `Monday URL: ${url}\n`;
+  md += `\n## What needs to be done\n\n${description}\n`;
+
+  if (requirements) {
+    md += `\n## Requirements\n\n${requirements}\n`;
+  }
+
+  if (task.subitems && task.subitems.length > 0) {
+    md += `\n## Sub-tasks\n\n`;
+    for (const sub of task.subitems) {
+      const subStatus = sub.column_values.find(
+        c => c.id.includes('status') || c.title.toLowerCase() === 'status'
+      )?.text || '';
+      const isDone = subStatus.toLowerCase().includes('done') || subStatus.toLowerCase().includes('complete');
+      md += `- [${isDone ? 'x' : ' '}] ${sub.name}\n`;
+    }
+  }
+
+  return md;
+}
+
+async function writeContextFiles(task: MondayDetailedTask, url: string): Promise<void> {
+  const root = getWorkspaceRoot();
+  if (!root) return;
+
+  const mondayDir = path.join(root, 'monday');
+
+  // Create monday/ directory if needed
+  if (!fs.existsSync(mondayDir)) {
+    fs.mkdirSync(mondayDir, { recursive: true });
+  }
+
+  // Write TASK.md
+  const taskMd = generateTaskMarkdown(task, url);
+  fs.writeFileSync(path.join(mondayDir, 'TASK.md'), taskMd, 'utf-8');
+
+  // Write CONTEXT.md
+  const contextMd = generateContextMarkdown(task, url);
+  fs.writeFileSync(path.join(mondayDir, 'CONTEXT.md'), contextMd, 'utf-8');
+
+  // Ensure monday/ is in .gitignore
+  ensureGitignoreEntry(root, 'monday/');
+}
+
+function clearContextFiles(): void {
+  const root = getWorkspaceRoot();
+  if (!root) return;
+
+  const mondayDir = path.join(root, 'monday');
+  if (fs.existsSync(mondayDir)) {
+    const taskFile = path.join(mondayDir, 'TASK.md');
+    const contextFile = path.join(mondayDir, 'CONTEXT.md');
+    if (fs.existsSync(taskFile)) fs.unlinkSync(taskFile);
+    if (fs.existsSync(contextFile)) fs.unlinkSync(contextFile);
+  }
+}
+
+// ========== Monday Sidebar Controller ==========
+
+class MondaySidebarController {
+  private treeProvider: MondayTaskTreeProvider;
+  private lastBranch: string = '';
+  private lastTaskId: string = '';
+
+  constructor(treeProvider: MondayTaskTreeProvider) {
+    this.treeProvider = treeProvider;
+  }
+
+  async update(): Promise<void> {
+    const branch = await getCurrentBranchName();
+    if (!branch) {
+      this.treeProvider.setNoTask();
+      clearContextFiles();
+      this.lastBranch = '';
+      this.lastTaskId = '';
+      return;
+    }
+
+    const taskId = resolveTaskIdForBranch(branch);
+    if (!taskId) {
+      this.treeProvider.setNoTask();
+      clearContextFiles();
+      this.lastBranch = branch;
+      this.lastTaskId = '';
+      return;
+    }
+
+    // Only re-fetch if branch or task ID changed
+    if (branch === this.lastBranch && taskId === this.lastTaskId) {
+      return;
+    }
+
+    this.lastBranch = branch;
+    this.lastTaskId = taskId;
+
+    const boardId = getMondayBoardId();
+    const url = getMondayTaskUrl(boardId, taskId);
+
+    const task = await fetchDetailedMondayTask(taskId);
+    if (task) {
+      this.treeProvider.setTask(task, url);
+      await writeContextFiles(task, url);
+    } else {
+      this.treeProvider.setNoTask();
+      clearContextFiles();
+    }
+  }
+
+  async forceRefresh(): Promise<void> {
+    // Clear cache to force re-fetch
+    this.lastBranch = '';
+    this.lastTaskId = '';
+    await this.update();
+  }
+}
+
+// ========== Original Monday.com Functions ==========
 
 async function fetchCurrentMondayUser(token: string): Promise<{ id: number; name: string } | null> {
   try {
@@ -462,7 +1020,7 @@ async function checkBranchForMondayLink(): Promise<void> {
 
     if (mapping) {
       // Update the prepare-commit-msg hook for the current branch's task
-      await installPrepareCommitMsgHook(mapping.taskId, mapping.boardId);
+      await installPrepareCommitMsgHook(mapping.boardId);
     }
   } catch {
     // ignore
@@ -586,6 +1144,8 @@ class TogglTracker {
   // Org filtering
   private isOrgAllowed: boolean = false;
   private lastCheckedOrgFolder: string = '';
+  // Monday sidebar controller (set externally)
+  public mondaySidebarController: MondaySidebarController | null = null;
 
   constructor() {
     this.statusBarItem = vscode.window.createStatusBarItem(
@@ -644,7 +1204,6 @@ class TogglTracker {
 
   /**
    * Extract the GitHub org/user from the git remote URL of the current workspace.
-   * Supports both SSH (git@github.com:org/repo.git) and HTTPS (https://github.com/org/repo.git).
    */
   private async getGitRemoteOrg(): Promise<string | null> {
     const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -674,10 +1233,8 @@ class TogglTracker {
 
   /**
    * Check if the current repo belongs to one of the allowed GitHub organizations.
-   * Caches the result per workspace folder to avoid repeated git calls.
-   * Returns true if allowedOrgs is empty (no filtering).
    */
-  private async checkOrgAllowed(): Promise<boolean> {
+  async checkOrgAllowed(): Promise<boolean> {
     const config = this.getConfig();
     const allowedOrgs = config.get<string[]>('allowedOrgs') || [];
 
@@ -734,12 +1291,14 @@ class TogglTracker {
       this.statusBarItem.hide();
       this.newBranchStatusBarItem.hide();
       this.breakStatusBarItem.hide();
+      vscode.commands.executeCommand('setContext', 'togglMondayTask.visible', false);
       return;
     }
 
     this.statusBarItem.show();
     this.newBranchStatusBarItem.show();
     this.breakStatusBarItem.show();
+    vscode.commands.executeCommand('setContext', 'togglMondayTask.visible', true);
     this.isTracking = true;
     await this.checkBranch();
 
@@ -764,10 +1323,12 @@ class TogglTracker {
         this.statusBarItem.hide();
         this.newBranchStatusBarItem.hide();
         this.breakStatusBarItem.hide();
+        vscode.commands.executeCommand('setContext', 'togglMondayTask.visible', false);
       } else {
         this.statusBarItem.show();
         this.newBranchStatusBarItem.show();
         this.breakStatusBarItem.show();
+        vscode.commands.executeCommand('setContext', 'togglMondayTask.visible', true);
         if (!this.isTracking) {
           await this.start();
         }
@@ -777,7 +1338,7 @@ class TogglTracker {
     // Handle window focus - focused window takes over Toggl
     vscode.window.onDidChangeWindowState(async (state) => {
       if (state.focused && this.isTracking) {
-        console.log('Window focused - taking over Toggl tracking (v0.12.1)');
+        console.log('Window focused - taking over Toggl tracking (v0.20.0)');
         // Check what Toggl is currently tracking
         const currentTogglEntry = await this.getCurrentTogglEntry();
         const branch = await this.getCurrentBranch();
@@ -797,6 +1358,11 @@ class TogglTracker {
             this.currentBranch = ''; // Force restart
             await this.checkBranch();
           }
+        }
+
+        // Also update sidebar on focus
+        if (this.mondaySidebarController) {
+          this.mondaySidebarController.update();
         }
       }
     });
@@ -848,11 +1414,7 @@ class TogglTracker {
   }
 
   private extractTicketId(branch: string): string | null {
-    const config = this.getConfig();
-    const pattern = config.get<string>('branchPattern') || '(\\d{6,})';
-    const regex = new RegExp(pattern);
-    const match = branch.match(regex);
-    return match ? match[1] : null;
+    return extractTaskIdFromBranch(branch);
   }
 
   private async getMondayTaskName(ticketId: string): Promise<string | null> {
@@ -1005,6 +1567,11 @@ class TogglTracker {
       this.currentBranch = branch;
       await this.stopCurrentEntry();
       await this.startNewEntry(branch);
+
+      // Update Monday sidebar when branch changes
+      if (this.mondaySidebarController) {
+        this.mondaySidebarController.update();
+      }
     }
   }
 
@@ -1107,7 +1674,6 @@ class TogglTracker {
     }
 
     try {
-
       const payload: any = {
         description,
         workspace_id: workspaceId,
@@ -1146,7 +1712,6 @@ class TogglTracker {
   async showStatus() {
     const config = this.getConfig();
     const apiToken = config.get<string>('apiToken');
-    const workspaceId = config.get<number>('workspaceId');
 
     if (!apiToken) {
       vscode.window.showInformationMessage('Toggl: No API token configured');
@@ -1352,6 +1917,20 @@ async function checkForUpdates(context: vscode.ExtensionContext) {
 
 export async function activate(context: vscode.ExtensionContext) {
   tracker = new TogglTracker();
+
+  // ========== Monday.com Sidebar TreeView ==========
+  const mondayTreeProvider = new MondayTaskTreeProvider();
+  const mondaySidebarController = new MondaySidebarController(mondayTreeProvider);
+  tracker.mondaySidebarController = mondaySidebarController;
+
+  const treeView = vscode.window.createTreeView('togglMondayTask', {
+    treeDataProvider: mondayTreeProvider,
+    showCollapseAll: true,
+  });
+  context.subscriptions.push(treeView);
+
+  // Set context for view visibility (will be controlled by org check in tracker.start())
+  vscode.commands.executeCommand('setContext', 'togglMondayTask.visible', true);
   
   // Check for updates on startup (after 5 seconds to not slow down activation)
   setTimeout(() => checkForUpdates(context), 5000);
@@ -1370,6 +1949,19 @@ export async function activate(context: vscode.ExtensionContext) {
     // Monday.com integration commands
     vscode.commands.registerCommand('toggl-track-auto.createBranchFromTask', () => createBranchFromTask()),
     vscode.commands.registerCommand('toggl-track-auto.copyMondayTaskLink', () => copyMondayTaskLink()),
+    // New commands for v0.20.0
+    vscode.commands.registerCommand('toggl-track-auto.refreshTaskContext', async () => {
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Refreshing Monday.com task context...' },
+        async () => {
+          await mondaySidebarController.forceRefresh();
+        }
+      );
+      vscode.window.showInformationMessage('Monday.com task context refreshed.');
+    }),
+    vscode.commands.registerCommand('toggl-track-auto.refreshMondaySidebar', async () => {
+      await mondaySidebarController.forceRefresh();
+    }),
   );
 
   // Add tracker to subscriptions for proper disposal
@@ -1387,8 +1979,12 @@ export async function activate(context: vscode.ExtensionContext) {
     tracker.start();
   }
 
-  // On startup, check if current branch has a Monday task and update hook
-  setTimeout(() => checkBranchForMondayLink(), 3000);
+  // On startup, check if current branch has a Monday task and update hook + sidebar
+  setTimeout(async () => {
+    checkBranchForMondayLink();
+    // Initial sidebar update
+    mondaySidebarController.update();
+  }, 3000);
 }
 
 export function deactivate() {
