@@ -1,0 +1,106 @@
+{
+  "name": "toggl-track-auto",
+  "displayName": "Toggl Track Auto",
+  "description": "Automatically track time in Toggl based on your git branch and Monday.com tickets",
+  "version": "0.1.0",
+  "publisher": "pivot",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Pivotteam/toggl-track-vscode.git"
+  },
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "toggl-track-auto.setup",
+        "title": "Toggl: Setup (Configure API tokens)"
+      },
+      {
+        "command": "toggl-track-auto.start",
+        "title": "Toggl: Start Tracking"
+      },
+      {
+        "command": "toggl-track-auto.stop",
+        "title": "Toggl: Stop Tracking"
+      },
+      {
+        "command": "toggl-track-auto.status",
+        "title": "Toggl: Show Status"
+      }
+    ],
+    "configuration": {
+      "title": "Toggl Track Auto",
+      "properties": {
+        "togglTrackAuto.apiToken": {
+          "type": "string",
+          "default": "",
+          "description": "Your Toggl API token (from https://track.toggl.com/profile)"
+        },
+        "togglTrackAuto.workspaceId": {
+          "type": "number",
+          "default": 0,
+          "description": "Your Toggl workspace ID"
+        },
+        "togglTrackAuto.mondayApiToken": {
+          "type": "string",
+          "default": "",
+          "description": "Your Monday.com API token (optional, for task names)"
+        },
+        "togglTrackAuto.mondayBoardId": {
+          "type": "string",
+          "default": "4176868787",
+          "description": "Monday.com board ID for SPRINTS DEV"
+        },
+        "togglTrackAuto.branchPattern": {
+          "type": "string",
+          "default": "(\\d{6,})",
+          "description": "Regex pattern to extract ticket ID from branch name"
+        },
+        "togglTrackAuto.entryFormat": {
+          "type": "string",
+          "default": "[{ticket_id}] {task_name}",
+          "description": "Format for Toggl time entry description"
+        },
+        "togglTrackAuto.idleTimeoutMinutes": {
+          "type": "number",
+          "default": 5,
+          "description": "Stop tracking after this many minutes of inactivity"
+        },
+        "togglTrackAuto.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable automatic time tracking"
+        },
+        "togglTrackAuto.projectId": {
+          "type": "number",
+          "default": 0,
+          "description": "Toggl project ID to use (0 for no project)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.74.0",
+    "typescript": "^5.0.0",
+    "@vscode/vsce": "^2.22.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  }
+}
