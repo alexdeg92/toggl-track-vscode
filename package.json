@@ -2,7 +2,7 @@
   "name": "toggl-track-auto",
   "displayName": "Toggl Track Auto",
   "description": "Automatically track time in Toggl based on your git branch and Monday.com tickets",
-  "version": "0.20.1",
+  "version": "0.21.0",
   "publisher": "pivot",
   "repository": {
     "type": "git",
