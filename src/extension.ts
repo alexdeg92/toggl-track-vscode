@@ -104,6 +104,7 @@ interface MondayItem {
 
 class TogglTracker {
   private statusBarItem: vscode.StatusBarItem;
+  private breakStatusBarItem: vscode.StatusBarItem;
   private currentBranch: string = '';
   private currentEntryId: number | null = null;
   private lastActivity: number = Date.now();
@@ -116,6 +117,11 @@ class TogglTracker {
   private lastStoppedTime: number = 0;
   private lastStoppedEntryId: number | null = null;
   private currentDescription: string = '';
+  // Break tracking
+  private isOnBreak: boolean = false;
+  private preBreakEntryId: number | null = null;
+  private preBreakDescription: string = '';
+  private preBreakBranch: string = '';
 
   constructor() {
     this.statusBarItem = vscode.window.createStatusBarItem(
@@ -131,6 +137,27 @@ class TogglTracker {
     
     this.statusBarItem.show();
     this.updateStatusBar('$(clock) Toggl: Initializing...');
+    
+    // Break button
+    this.breakStatusBarItem = vscode.window.createStatusBarItem(
+      vscode.StatusBarAlignment.Left,
+      99
+    );
+    this.breakStatusBarItem.command = 'toggl-track-auto.toggleBreak';
+    this.updateBreakButton();
+    this.breakStatusBarItem.show();
+  }
+  
+  private updateBreakButton() {
+    if (this.isOnBreak) {
+      this.breakStatusBarItem.text = '$(debug-stop) End Break';
+      this.breakStatusBarItem.tooltip = 'Click to end break and resume work';
+      this.breakStatusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    } else {
+      this.breakStatusBarItem.text = '$(coffee) Break';
+      this.breakStatusBarItem.tooltip = 'Click to start a break';
+      this.breakStatusBarItem.backgroundColor = undefined;
+    }
   }
 
   private getConfig() {
@@ -573,6 +600,102 @@ class TogglTracker {
     }
   }
 
+  async toggleBreak() {
+    if (this.isOnBreak) {
+      await this.endBreak();
+    } else {
+      await this.startBreak();
+    }
+  }
+
+  async startBreak() {
+    const config = this.getConfig();
+    const apiToken = config.get<string>('apiToken');
+    const workspaceId = config.get<number>('workspaceId');
+
+    if (!apiToken || !workspaceId) {
+      vscode.window.showErrorMessage('Toggl: Not configured');
+      return;
+    }
+
+    // Ask what kind of break
+    const breakType = await vscode.window.showQuickPick(
+      ['☕ Coffee Break', '🍽️ Lunch Break', '🚶 Short Break'],
+      { placeHolder: 'Select break type' }
+    );
+
+    if (!breakType) return;
+
+    // Save current state before break
+    this.preBreakEntryId = this.currentEntryId;
+    this.preBreakDescription = this.currentDescription;
+    this.preBreakBranch = this.currentBranch;
+
+    // Stop current entry
+    await this.stopCurrentEntry();
+
+    // Start break entry
+    const breakDescription = breakType.replace(/^[^\s]+\s/, ''); // Remove emoji
+    try {
+      const response = await axios.post(
+        `https://api.track.toggl.com/api/v9/workspaces/${workspaceId}/time_entries`,
+        {
+          description: breakDescription,
+          workspace_id: workspaceId,
+          start: new Date().toISOString(),
+          duration: -1,
+          created_with: 'toggl-track-vscode',
+          billable: false, // Breaks are not billable
+        },
+        {
+          auth: { username: apiToken, password: 'api_token' },
+        }
+      );
+
+      this.currentEntryId = response.data.id;
+      this.currentDescription = breakDescription;
+      this.isOnBreak = true;
+      this.isTracking = false; // Pause auto-tracking during break
+      
+      this.updateStatusBar(`$(coffee) Toggl: ${breakDescription}`);
+      this.updateBreakButton();
+      
+      vscode.window.showInformationMessage(`Break started: ${breakDescription}`);
+    } catch (error) {
+      console.error('Failed to start break:', error);
+      vscode.window.showErrorMessage('Toggl: Failed to start break');
+    }
+  }
+
+  async endBreak() {
+    const config = this.getConfig();
+    const apiToken = config.get<string>('apiToken');
+    const workspaceId = config.get<number>('workspaceId');
+
+    if (!apiToken || !workspaceId) return;
+
+    // Stop break entry
+    await this.stopCurrentEntry();
+
+    this.isOnBreak = false;
+    this.isTracking = true; // Resume auto-tracking
+    this.updateBreakButton();
+
+    // Resume previous task
+    if (this.preBreakBranch) {
+      this.currentBranch = ''; // Force restart
+      await this.checkBranch();
+      vscode.window.showInformationMessage('Break ended - resumed tracking');
+    } else {
+      this.updateStatusBar('$(clock) Toggl: Ready');
+    }
+
+    // Clear pre-break state
+    this.preBreakEntryId = null;
+    this.preBreakDescription = '';
+    this.preBreakBranch = '';
+  }
+
   dispose() {
     // Stop tracking and timer synchronously as much as possible
     this.isTracking = false;
@@ -587,6 +710,7 @@ class TogglTracker {
     // Fire the stop request (don't await - extension may close before it completes)
     this.stopCurrentEntry().catch(() => {});
     this.statusBarItem.dispose();
+    this.breakStatusBarItem.dispose();
   }
 }
 
@@ -659,6 +783,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('toggl-track-auto.start', () => tracker.start()),
     vscode.commands.registerCommand('toggl-track-auto.stop', () => tracker.stop()),
     vscode.commands.registerCommand('toggl-track-auto.status', () => tracker.showStatus()),
+    vscode.commands.registerCommand('toggl-track-auto.toggleBreak', () => tracker.toggleBreak()),
     vscode.commands.registerCommand('toggl-track-auto.setup', async () => {
       const success = await runSetupWizard();
       if (success) {

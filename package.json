@@ -2,7 +2,7 @@
   "name": "toggl-track-auto",
   "displayName": "Toggl Track Auto",
   "description": "Automatically track time in Toggl based on your git branch and Monday.com tickets",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "publisher": "pivot",
   "repository": {
     "type": "git",
@@ -35,6 +35,10 @@
       {
         "command": "toggl-track-auto.status",
         "title": "Toggl: Show Status"
+      },
+      {
+        "command": "toggl-track-auto.toggleBreak",
+        "title": "Toggl: Start/End Break"
       }
     ],
     "configuration": {
