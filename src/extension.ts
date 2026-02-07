@@ -42,10 +42,19 @@ interface MondayColumnValue {
   column?: { title: string };
 }
 
+interface MondayAsset {
+  id: string;
+  name: string;
+  url: string;
+  file_extension: string;
+  public_url?: string;
+}
+
 interface MondayUpdate {
   text_body: string;
   created_at: string;
   creator: { name: string };
+  assets?: MondayAsset[];
 }
 
 interface MondaySubItem {
@@ -157,10 +166,17 @@ async function fetchDetailedMondayTask(taskId: string): Promise<MondayDetailedTa
             text
             column { title }
           }
-          updates(limit: 5) {
+          updates(limit: 10) {
             text_body
             created_at
             creator { name }
+            assets {
+              id
+              name
+              url
+              file_extension
+              public_url
+            }
           }
           subitems {
             id
@@ -645,13 +661,185 @@ function clearContextFiles(): void {
 
 // ========== Monday Sidebar Controller ==========
 
+// ========== Monday.com Webview Sidebar ==========
+
+class MondayWebviewProvider implements vscode.WebviewViewProvider {
+  public static readonly viewType = 'togglMondayWebview';
+  private _view?: vscode.WebviewView;
+  private _task: MondayDetailedTask | null = null;
+  private _url: string = '';
+
+  constructor(private readonly _extensionUri: vscode.Uri) {}
+
+  resolveWebviewView(webviewView: vscode.WebviewView) {
+    this._view = webviewView;
+    webviewView.webview.options = { enableScripts: true };
+    this._updateWebview();
+  }
+
+  setTask(task: MondayDetailedTask | null, url: string) {
+    this._task = task;
+    this._url = url;
+    this._updateWebview();
+  }
+
+  setNoTask() {
+    this._task = null;
+    this._url = '';
+    this._updateWebview();
+  }
+
+  private _updateWebview() {
+    if (!this._view) return;
+    this._view.webview.html = this._getHtml();
+  }
+
+  private _getHtml(): string {
+    const task = this._task;
+    if (!task) {
+      return [
+        '<!DOCTYPE html><html><head><style>',
+        'body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 12px; }',
+        '.empty { opacity: 0.6; text-align: center; margin-top: 20px; }',
+        '</style></head><body>',
+        '<p class="empty">No Monday.com task linked to the current branch.</p>',
+        '</body></html>'
+      ].join('\n');
+    }
+
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    const status = getColumnValue(task, 'status9') || getColumnValue(task, 'Status') || '';
+    const priority = getColumnValue(task, 'dup__of_priority_mkkassyk') || getColumnValue(task, 'Priority') || '';
+    const person = getColumnValue(task, 'person') || getColumnValue(task, 'Person') || '';
+    const group = task.group?.title || '';
+
+    const statusColor = status.toLowerCase().includes('done') ? '#4caf50'
+      : status.toLowerCase().includes('progress') ? '#2196f3'
+      : status.toLowerCase().includes('review') ? '#9c27b0'
+      : status.toLowerCase().includes('stuck') ? '#f44336' : '#ff9800';
+
+    const prioColor = priority.toLowerCase().includes('critical') || priority.toLowerCase().includes('p1') ? '#f44336'
+      : priority.toLowerCase().includes('urgent') || priority.toLowerCase().includes('p2') ? '#ff9800'
+      : priority.toLowerCase().includes('medium') ? '#ffeb3b' : '#4caf50';
+
+    // Build updates HTML
+    const updatesArr: string[] = [];
+    if (task.updates && task.updates.length > 0) {
+      task.updates.forEach((u, i) => {
+        const date = new Date(u.created_at).toLocaleDateString();
+        const author = u.creator?.name || 'Unknown';
+        const body = esc(u.text_body || '').replace(/\n/g, '<br>');
+
+        // Assets
+        const assetParts: string[] = [];
+        if (u.assets && u.assets.length > 0) {
+          u.assets.forEach(a => {
+            const ext = (a.file_extension || '').toLowerCase();
+            const aUrl = a.public_url || a.url;
+            if (['png','jpg','jpeg','gif','webp','svg'].includes(ext)) {
+              assetParts.push('<div class="asset"><img src="' + aUrl + '" alt="' + esc(a.name) + '" style="max-width:100%;border-radius:4px;margin:4px 0;" /></div>');
+            } else if (['mp4','webm','mov'].includes(ext)) {
+              assetParts.push('<div class="asset"><video src="' + aUrl + '" controls style="max-width:100%;border-radius:4px;margin:4px 0;"></video></div>');
+            } else {
+              assetParts.push('<div class="asset"><a href="' + aUrl + '">\u{1F4CE} ' + esc(a.name) + '</a></div>');
+            }
+          });
+        }
+
+        updatesArr.push(
+          '<div class="update">' +
+          '<div class="update-header" onclick="toggle(\'upd' + i + '\')">' +
+          '<span class="arrow" id="arrow' + i + '">\u25B6</span>' +
+          '<strong style="color: #64b5f6;">' + esc(author) + '</strong>' +
+          '<span class="date">' + date + '</span>' +
+          '</div>' +
+          '<div class="update-body" id="upd' + i + '" style="display:none;">' +
+          body + assetParts.join('') +
+          '</div></div>'
+        );
+      });
+    }
+
+    // Build sub-items HTML
+    const subParts: string[] = [];
+    if (task.subitems && task.subitems.length > 0) {
+      task.subitems.forEach(sub => {
+        const subStatus = sub.column_values.find(c => c.id.includes('status') || (c.column?.title || '').toLowerCase() === 'status')?.text || '';
+        const isDone = subStatus.toLowerCase().includes('done');
+        const isProgress = subStatus.toLowerCase().includes('progress');
+        const dotColor = isDone ? '#4caf50' : isProgress ? '#2196f3' : '#ff9800';
+        const icon = isDone ? '\u2705' : isProgress ? '\u{1F535}' : '\u2B55';
+        subParts.push(
+          '<div class="subitem">' + icon + ' <span>' + esc(sub.name) + '</span>' +
+          '<span class="sub-status" style="color:' + dotColor + '">' + esc(subStatus) + '</span></div>'
+        );
+      });
+    }
+
+    // Badges
+    const badges: string[] = [];
+    if (status) badges.push('<span class="badge" style="background:' + statusColor + '22;color:' + statusColor + ';border:1px solid ' + statusColor + '44">\u25CF ' + esc(status) + '</span>');
+    if (priority) badges.push('<span class="badge" style="background:' + prioColor + '22;color:' + prioColor + ';border:1px solid ' + prioColor + '44">\u{1F525} ' + esc(priority) + '</span>');
+    if (person) badges.push('<span class="badge" style="background:#4caf5022;color:#4caf50;border:1px solid #4caf5044">\u{1F464} ' + esc(person) + '</span>');
+    if (group) badges.push('<span class="badge" style="background:#9c27b022;color:#9c27b0;border:1px solid #9c27b044">\u{1F4C1} ' + esc(group) + '</span>');
+
+    const parts: string[] = [
+      '<!DOCTYPE html><html><head><style>',
+      'body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 8px; font-size: 12px; line-height: 1.5; }',
+      '.task-name { font-size: 14px; font-weight: bold; margin-bottom: 10px; }',
+      '.task-id { opacity: 0.5; font-size: 11px; }',
+      '.meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }',
+      '.badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }',
+      '.section { margin: 12px 0 6px; font-weight: bold; font-size: 12px; color: var(--vscode-descriptionForeground); border-bottom: 1px solid var(--vscode-widget-border); padding-bottom: 4px; }',
+      '.update { margin: 6px 0; border-left: 2px solid #64b5f6; padding-left: 8px; }',
+      '.update-header { cursor: pointer; padding: 4px 0; display: flex; align-items: center; gap: 6px; }',
+      '.update-header:hover { background: var(--vscode-list-hoverBackground); border-radius: 3px; }',
+      '.arrow { font-size: 10px; transition: transform 0.2s; display: inline-block; width: 12px; }',
+      '.arrow.open { transform: rotate(90deg); }',
+      '.date { opacity: 0.5; font-size: 11px; margin-left: auto; }',
+      '.update-body { padding: 6px 0 6px 18px; font-size: 12px; opacity: 0.9; word-break: break-word; }',
+      '.subitem { padding: 3px 0; display: flex; align-items: center; gap: 6px; font-size: 12px; }',
+      '.sub-status { opacity: 0.7; font-size: 11px; margin-left: auto; }',
+      'a { color: #64b5f6; }',
+      '.open-link { display: block; text-align: center; margin-top: 12px; padding: 6px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-radius: 3px; text-decoration: none; font-size: 12px; }',
+      '.open-link:hover { background: var(--vscode-button-hoverBackground); }',
+      'img { cursor: pointer; }',
+      '</style></head><body>',
+      '<div class="task-name">' + esc(task.name) + ' <span class="task-id">#' + task.id + '</span></div>',
+      '<div class="meta">' + badges.join('') + '</div>',
+    ];
+
+    if (updatesArr.length > 0) {
+      parts.push('<div class="section">\u{1F4AC} Updates (' + task.updates.length + ')</div>');
+      parts.push(...updatesArr);
+    }
+
+    if (subParts.length > 0) {
+      parts.push('<div class="section">\u{1F4CB} Sub-Items (' + task.subitems.length + ')</div>');
+      parts.push(...subParts);
+    }
+
+    parts.push('<a class="open-link" href="' + this._url + '">Open in Monday.com \u2197</a>');
+    parts.push('<script>function toggle(id){var el=document.getElementById(id);var idx=id.replace("upd","");var arrow=document.getElementById("arrow"+idx);if(el.style.display==="none"){el.style.display="block";arrow.classList.add("open");}else{el.style.display="none";arrow.classList.remove("open");}}</script>');
+    parts.push('</body></html>');
+
+    return parts.join('\n');
+  }
+}
+
 class MondaySidebarController {
   private treeProvider: MondayTaskTreeProvider;
+  private webviewProvider: MondayWebviewProvider | null = null;
   private lastBranch: string = '';
   private lastTaskId: string = '';
 
   constructor(treeProvider: MondayTaskTreeProvider) {
     this.treeProvider = treeProvider;
+  }
+
+  setWebviewProvider(provider: MondayWebviewProvider) {
+    this.webviewProvider = provider;
   }
 
   async update(): Promise<void> {
@@ -687,9 +875,11 @@ class MondaySidebarController {
     const task = await fetchDetailedMondayTask(taskId);
     if (task) {
       this.treeProvider.setTask(task, url);
+      this.webviewProvider?.setTask(task, url);
       await writeContextFiles(task, url);
     } else {
       this.treeProvider.setNoTask();
+      this.webviewProvider?.setNoTask();
       clearContextFiles();
     }
   }
@@ -2029,11 +2219,12 @@ export async function activate(context: vscode.ExtensionContext) {
   const mondaySidebarController = new MondaySidebarController(mondayTreeProvider);
   tracker.mondaySidebarController = mondaySidebarController;
 
-  const treeView = vscode.window.createTreeView('togglMondayTask', {
-    treeDataProvider: mondayTreeProvider,
-    showCollapseAll: true,
-  });
-  context.subscriptions.push(treeView);
+  // Register webview provider for rich sidebar
+  const mondayWebviewProvider = new MondayWebviewProvider(context.extensionUri);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider('togglMondayWebview', mondayWebviewProvider)
+  );
+  mondaySidebarController.setWebviewProvider(mondayWebviewProvider);
 
   // Set context for view visibility (will be controlled by org check in tracker.start())
   vscode.commands.executeCommand('setContext', 'togglMondayTask.visible', true);
