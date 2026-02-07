@@ -727,7 +727,25 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
     this._view = webviewView;
     webviewView.webview.options = { enableScripts: true };
     this._updateWebview();
+
+    // When panel becomes visible, trigger a refresh to load current task
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        this._updateWebview();
+      }
+    });
+
+    // Also trigger a task fetch if we don't have one yet
+    if (!this._task && this._onReady) {
+      this._onReady();
+    }
   }
+
+  onReady(callback: () => void) {
+    this._onReady = callback;
+  }
+
+  private _onReady?: () => void;
 
   setTask(task: MondayDetailedTask | null, url: string) {
     this._task = task;
@@ -2336,6 +2354,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.window.registerWebviewViewProvider('togglMondayWebview', mondayWebviewProvider)
   );
   mondaySidebarController.setWebviewProvider(mondayWebviewProvider);
+  mondayWebviewProvider.onReady(() => mondaySidebarController.forceRefresh());
 
   // Set context for view visibility (will be controlled by org check in tracker.start())
   vscode.commands.executeCommand('setContext', 'togglMondayTask.visible', true);
