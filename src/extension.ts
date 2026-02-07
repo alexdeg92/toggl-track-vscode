@@ -446,43 +446,76 @@ class MondayTaskTreeProvider implements vscode.TreeDataProvider<MondayTaskItem> 
       ));
     }
 
-    // Updates — expand below to show full content
+    // Updates — expand below to show full content (word-wrapped)
     if (task.updates && task.updates.length > 0) {
+      const wrapText = (text: string, width: number = 45): string[] => {
+        const result: string[] = [];
+        for (const line of text.split('\n')) {
+          if (!line.trim()) { result.push(''); continue; }
+          const words = line.split(' ');
+          let current = '';
+          for (const word of words) {
+            if (current.length + word.length + 1 > width && current) {
+              result.push(current);
+              current = word;
+            } else {
+              current = current ? current + ' ' + word : word;
+            }
+          }
+          if (current) result.push(current);
+        }
+        return result;
+      };
+
       const updateChildren = task.updates.map(update => {
         const date = new Date(update.created_at).toLocaleDateString();
         const author = update.creator?.name || 'Unknown';
         const body = (update.text_body || '').trim();
-        // Each line of the update body becomes a child item
-        const bodyLines = body.split('\n').filter((l: string) => l.trim());
-        const lineChildren = bodyLines.map((line: string) =>
-          new MondayTaskItem(
-            line.trim(),
-            vscode.TreeItemCollapsibleState.None,
-            undefined,
-            {
-              tooltip: new vscode.MarkdownString(line.trim()),
-              iconPath: new vscode.ThemeIcon('dash', new vscode.ThemeColor('charts.blue')),
-            }
-          )
-        );
+        // Word-wrap each line to fit sidebar
+        const wrappedLines = wrapText(body);
+        const lineChildren: MondayTaskItem[] = [];
+        
+        // Add a separator line first
+        wrappedLines.forEach((line: string) => {
+          if (!line.trim()) {
+            // Empty line = paragraph break
+            lineChildren.push(new MondayTaskItem(
+              ' ',
+              vscode.TreeItemCollapsibleState.None,
+              undefined,
+              { iconPath: new vscode.ThemeIcon('blank') }
+            ));
+          } else {
+            lineChildren.push(new MondayTaskItem(
+              line,
+              vscode.TreeItemCollapsibleState.None,
+              undefined,
+              {
+                tooltip: new vscode.MarkdownString(line),
+                iconPath: new vscode.ThemeIcon('dash', new vscode.ThemeColor('charts.blue')),
+              }
+            ));
+          }
+        });
+
         return new MondayTaskItem(
           `${author} — ${date}`,
           vscode.TreeItemCollapsibleState.Collapsed,
           lineChildren,
           {
-            description: body.substring(0, 60).replace(/\n/g, ' ') + (body.length > 60 ? '...' : ''),
+            description: body.substring(0, 50).replace(/\n/g, ' ') + (body.length > 50 ? '...' : ''),
             tooltip: new vscode.MarkdownString(`**${author}** — ${date}\n\n---\n\n${body.replace(/\n/g, '\n\n')}`),
             iconPath: new vscode.ThemeIcon('comment', new vscode.ThemeColor('charts.blue')),
           }
         );
       });
       items.push(new MondayTaskItem(
-        'Updates',
+        '━━ Updates',
         vscode.TreeItemCollapsibleState.Collapsed,
         updateChildren,
         {
-          description: `(${task.updates.length})`,
-          iconPath: new vscode.ThemeIcon('comment-discussion'),
+          description: `(${task.updates.length}) ━━━━━━━━━━━━`,
+          iconPath: new vscode.ThemeIcon('comment-discussion', new vscode.ThemeColor('charts.blue')),
         }
       ));
     }
@@ -509,12 +542,12 @@ class MondayTaskTreeProvider implements vscode.TreeDataProvider<MondayTaskItem> 
         );
       });
       items.push(new MondayTaskItem(
-        'Sub-items',
+        '━━ Sub-items',
         vscode.TreeItemCollapsibleState.Expanded,
         subChildren,
         {
-          description: `(${task.subitems.length})`,
-          iconPath: new vscode.ThemeIcon('list-tree'),
+          description: `(${task.subitems.length}) ━━━━━━━━━━`,
+          iconPath: new vscode.ThemeIcon('list-tree', new vscode.ThemeColor('charts.green')),
         }
       ));
     }
