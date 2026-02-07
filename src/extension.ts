@@ -2354,7 +2354,14 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.window.registerWebviewViewProvider('togglMondayWebview', mondayWebviewProvider)
   );
   mondaySidebarController.setWebviewProvider(mondayWebviewProvider);
-  mondayWebviewProvider.onReady(() => mondaySidebarController.forceRefresh());
+  mondayWebviewProvider.onReady(() => {
+    console.log('Monday webview ready, forcing refresh');
+    mondaySidebarController.forceRefresh();
+  });
+
+  // Also force initial sidebar update after a delay (ensures webview is ready)
+  setTimeout(() => mondaySidebarController.forceRefresh(), 3000);
+  setTimeout(() => mondaySidebarController.forceRefresh(), 8000);
 
   // Set context for view visibility (will be controlled by org check in tracker.start())
   vscode.commands.executeCommand('setContext', 'togglMondayTask.visible', true);
