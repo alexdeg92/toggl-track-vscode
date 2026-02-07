@@ -53,13 +53,13 @@ interface MondayAsset {
 interface MondayReply {
   text_body: string;
   created_at: string;
-  creator: { name: string };
+  creator: { name: string; photo_thumb_small?: string };
 }
 
 interface MondayUpdate {
   text_body: string;
   created_at: string;
-  creator: { name: string };
+  creator: { name: string; photo_thumb_small?: string };
   assets?: MondayAsset[];
   replies?: MondayReply[];
 }
@@ -176,7 +176,7 @@ async function fetchDetailedMondayTask(taskId: string): Promise<MondayDetailedTa
           updates(limit: 10) {
             text_body
             created_at
-            creator { name }
+            creator { name photo_thumb_small }
             assets {
               id
               name
@@ -187,7 +187,7 @@ async function fetchDetailedMondayTask(taskId: string): Promise<MondayDetailedTa
             replies {
               text_body
               created_at
-              creator { name }
+              creator { name photo_thumb_small }
             }
           }
           subitems {
@@ -808,28 +808,40 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
           const replyParts = u.replies.map(r => {
             const rDate = new Date(r.created_at).toLocaleDateString();
             const rAuthor = r.creator?.name || 'Unknown';
+            const rPhoto = (r.creator as any)?.photo_thumb_small;
             const rBody = esc(r.text_body || '').replace(/\n/g, '<br>');
+            let rHash = 0;
+            for (let rc = 0; rc < rAuthor.length; rc++) rHash = rAuthor.charCodeAt(rc) + ((rHash << 5) - rHash);
+            const rColor = colors[Math.abs(rHash) % colors.length];
+            const rInitials = rAuthor.split(' ').map((w: string) => w[0]).join('').substring(0, 2).toUpperCase();
+            const rAvatarHtml = rPhoto
+              ? '<img class="avatar-sm" src="' + rPhoto + '" />'
+              : '<span class="avatar-sm" style="background:' + rColor + '">' + rInitials + '</span>';
             return '<div class="reply">' +
-              '<div class="reply-hdr"><span class="author">' + esc(rAuthor) + '</span><span class="date">' + rDate + '</span></div>' +
+              '<div class="reply-hdr">' + rAvatarHtml + '<span class="author">' + esc(rAuthor) + '</span><span class="date">' + rDate + '</span></div>' +
               '<div class="reply-body">' + rBody + '</div>' +
               '</div>';
           });
           repliesHtml = '<div class="replies">' + replyParts.join('') + '</div>';
         }
 
-        // Generate avatar color from author name
-        const colors = ['#6366f1','#ec4899','#f59e0b','#22c55e','#3b82f6','#ef4444','#8b5cf6','#14b8a6','#f97316','#06b6d4'];
+        // Avatar: use photo or colored initials
+        const colors = ['#0073ea','#00c875','#e2445c','#fdab3d','#a25ddc','#579bfc','#ff158a','#ff5ac4','#cab641','#00d2d2'];
         let hash = 0;
         for (let c = 0; c < author.length; c++) hash = author.charCodeAt(c) + ((hash << 5) - hash);
         const avatarColor = colors[Math.abs(hash) % colors.length];
         const initials = author.split(' ').map((w: string) => w[0]).join('').substring(0, 2).toUpperCase();
+        const photoUrl = u.creator?.photo_thumb_small;
+        const avatarHtml = photoUrl
+          ? '<img class="avatar" src="' + photoUrl + '" />'
+          : '<span class="avatar" style="background:' + avatarColor + '">' + initials + '</span>';
 
         updatesHtml.push(
           '<div class="update">' +
           '<div class="update-hdr" onclick="tog(' + i + ')">' +
           '<span class="arr" id="a' + i + '">\u25B6</span>' +
-          '<span class="avatar" style="background:' + avatarColor + '">' + initials + '</span>' +
-          '<span class="author" style="color:' + avatarColor + '">' + esc(author) + '</span>' +
+          avatarHtml +
+          '<span class="author">' + esc(author) + '</span>' +
           (u.replies && u.replies.length ? '<span class="reply-badge">' + u.replies.length + ' replies</span>' : '') +
           '<span class="date">' + date + '</span>' +
           '</div>' +
@@ -855,7 +867,7 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
           '<div class="sub-row">' +
           '<span>' + icon + '</span>' +
           '<span class="sub-name">' + esc(sub.name) + '</span>' +
-          '<span class="sub-status" style="color:' + color + '">' + esc(subStatus) + '</span>' +
+          '<span class="sub-status" style="background:' + color + ';color:#fff">' + esc(subStatus) + '</span>' +
           '</div>'
         );
       });
@@ -863,62 +875,58 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
 
     return [
       '<!DOCTYPE html><html><head><style>',
-      ':root { --card-bg: rgba(255,255,255,0.03); --card-border: rgba(255,255,255,0.06); --accent: #6366f1; --accent2: #a78bfa; --green: #22c55e; --blue: #3b82f6; --orange: #f59e0b; --red: #ef4444; }',
+      ':root { --monday-bg: #292f4c; --monday-card: #30324e; --monday-border: rgba(255,255,255,0.08); --monday-blue: #0073ea; --monday-green: #00c875; --monday-red: #e2445c; --monday-orange: #fdab3d; --monday-purple: #a25ddc; --monday-text: #d5d8df; --monday-text2: #9699a6; }',
       '* { box-sizing: border-box; margin: 0; padding: 0; }',
-      'body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 12px; font-size: 12px; line-height: 1.55; overflow-x: hidden; }',
+      'body { font-family: "Figtree", "Poppins", var(--vscode-font-family), sans-serif; color: var(--monday-text); padding: 14px; font-size: 13px; line-height: 1.5; overflow-x: hidden; }',
       '',
-      '/* Header */',
-      '.task-title { font-size: 14px; font-weight: 700; padding: 0 0 10px; margin-bottom: 10px; letter-spacing: -0.2px; }',
+      '.task-title { font-size: 16px; font-weight: 600; padding: 0 0 12px; margin-bottom: 12px; border-bottom: 1px solid var(--monday-border); color: #fff; }',
       '.task-id { opacity: 0.3; font-size: 11px; font-weight: 400; }',
       '',
-      '/* Meta badges */',
-      '.meta { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 14px; }',
-      '.badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; background: var(--card-bg); border: 1px solid var(--card-border); }',
-      '.badge .dot { width: 7px; height: 7px; border-radius: 50%; }',
+      '.meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }',
+      '.badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 12px; border-radius: 16px; font-size: 12px; font-weight: 500; }',
+      '.badge .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }',
       '',
-      '/* Section headers */',
-      '.section { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: var(--vscode-descriptionForeground); margin: 16px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--card-border); }',
-      '.section .count { font-weight: 400; opacity: 0.5; }',
+      '.section { font-size: 13px; font-weight: 600; color: #fff; margin: 20px 0 10px; padding-bottom: 8px; border-bottom: 1px solid var(--monday-border); }',
+      '.section .count { font-weight: 400; color: var(--monday-text2); }',
       '',
-      '/* Update cards */',
-      '.update { margin: 0 0 4px; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 6px; overflow: hidden; }',
-      '.update-hdr { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; }',
+      '.update { margin: 0 0 6px; background: var(--monday-card); border: 1px solid var(--monday-border); border-radius: 8px; overflow: hidden; }',
+      '.update-hdr { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; transition: background 0.15s; }',
       '.update-hdr:hover { background: rgba(255,255,255,0.04); }',
-      '.avatar { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: #fff; flex-shrink: 0; }',
-      '.arr { font-size: 8px; transition: transform 0.2s; opacity: 0.3; }',
-      '.arr.open { transform: rotate(90deg); opacity: 0.6; }',
-      '.author { font-weight: 600; font-size: 12px; }',
-      '.date { margin-left: auto; opacity: 0.3; font-size: 10px; }',
-      '.reply-badge { font-size: 9px; padding: 1px 6px; border-radius: 10px; background: rgba(99,102,241,0.15); color: var(--accent2); }',
-      '.update-body { display: none; padding: 0 12px 12px 42px; font-size: 12px; line-height: 1.7; word-wrap: break-word; overflow-wrap: break-word; opacity: 0.8; }',
-      '.update-body img { max-width: 100%; border-radius: 6px; margin: 8px 0; }',
-      '.update-body video { max-width: 100%; border-radius: 6px; margin: 8px 0; }',
-      '.assets { margin-top: 8px; }',
+      '.avatar { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; flex-shrink: 0; object-fit: cover; }',
+      'img.avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }',
+      '.avatar-sm { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: #fff; flex-shrink: 0; object-fit: cover; }',
+      'img.avatar-sm { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }',
+      '.arr { font-size: 9px; transition: transform 0.2s; opacity: 0.35; color: var(--monday-text2); }',
+      '.arr.open { transform: rotate(90deg); opacity: 0.7; }',
+      '.author { font-weight: 600; font-size: 13px; color: #fff; }',
+      '.date { margin-left: auto; color: var(--monday-text2); font-size: 11px; }',
+      '.reply-badge { font-size: 11px; padding: 2px 8px; border-radius: 12px; background: rgba(0,115,234,0.15); color: var(--monday-blue); font-weight: 500; }',
+      '.update-body { display: none; padding: 2px 14px 14px 50px; font-size: 13px; line-height: 1.7; word-wrap: break-word; overflow-wrap: break-word; color: var(--monday-text); }',
+      '.update-body img { max-width: 100%; border-radius: 8px; margin: 8px 0; }',
+      '.update-body video { max-width: 100%; border-radius: 8px; margin: 8px 0; }',
+      '.assets { margin-top: 10px; }',
       '',
-      '/* Replies */',
-      '.replies { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--card-border); }',
-      '.reply { margin: 6px 0; padding: 8px 10px; background: rgba(167,139,250,0.06); border-radius: 6px; border-left: 3px solid var(--accent2); }',
-      '.reply-hdr { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }',
-      '.reply .author { font-size: 11px; color: var(--accent2); }',
+      '.replies { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--monday-border); }',
+      '.reply { margin: 8px 0; padding: 10px 12px; background: rgba(255,255,255,0.02); border-radius: 8px; border-left: 3px solid var(--monday-blue); }',
+      '.reply-hdr { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }',
+      '.reply .author { font-size: 12px; }',
       '.reply .date { font-size: 10px; }',
-      '.reply-body { font-size: 12px; line-height: 1.65; word-wrap: break-word; opacity: 0.8; }',
+      '.reply-body { font-size: 13px; line-height: 1.65; word-wrap: break-word; color: var(--monday-text); padding-left: 30px; }',
       '',
-      '/* Sub-items */',
-      '.sub-row { display: flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 4px; font-size: 12px; }',
+      '.sub-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px; font-size: 13px; transition: background 0.1s; }',
       '.sub-row:hover { background: rgba(255,255,255,0.03); }',
       '.sub-name { flex: 1; }',
-      '.sub-status { opacity: 0.5; font-size: 10px; white-space: nowrap; padding: 1px 8px; border-radius: 10px; background: var(--card-bg); }',
+      '.sub-status { font-size: 11px; padding: 2px 10px; border-radius: 12px; font-weight: 500; white-space: nowrap; }',
       '',
-      '/* Links & buttons */',
-      'a { color: var(--accent); text-decoration: none; }',
+      'a { color: var(--monday-blue); text-decoration: none; }',
       'a:hover { text-decoration: underline; }',
-      '.open-btn { display: block; text-align: center; margin: 16px 0 4px; padding: 8px; background: var(--accent); color: #fff; border-radius: 6px; text-decoration: none; font-size: 12px; font-weight: 600; letter-spacing: 0.3px; }',
-      '.open-btn:hover { opacity: 0.9; text-decoration: none; }',
+      '.open-btn { display: block; text-align: center; margin: 18px 0 6px; padding: 10px; background: var(--monday-blue); color: #fff; border-radius: 8px; text-decoration: none; font-size: 13px; font-weight: 600; transition: opacity 0.15s; }',
+      '.open-btn:hover { opacity: 0.85; text-decoration: none; }',
       '</style></head><body>',
       '<div class="task-title">' + esc(task.name) + ' <span class="task-id">#' + task.id + '</span></div>',
       '<div class="meta">' +
-        (status ? '<span class="badge"><span class="dot" style="background:' + statusColor + '"></span>' + esc(status) + '</span>' : '') +
-        (priority ? '<span class="badge" style="color:' + prioColor + '"><span class="dot" style="background:' + prioColor + '"></span>' + esc(priority) + '</span>' : '') +
+        (status ? '<span class="badge" style="background:' + statusColor + ';color:#fff">' + esc(status) + '</span>' : '') +
+        (priority ? '<span class="badge" style="background:' + prioColor + ';color:#fff">' + esc(priority) + '</span>' : '') +
         (person ? '<span class="badge">\u{1F464} ' + esc(person) + '</span>' : '') +
         (group ? '<span class="badge" style="color:var(--accent2)">\u{1F4C1} ' + esc(group) + '</span>' : '') +
       '</div>',
