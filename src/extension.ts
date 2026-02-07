@@ -36,8 +36,10 @@ interface BranchTaskMapping {
 
 interface MondayColumnValue {
   id: string;
-  title: string;
+  type?: string;
   text: string;
+  title?: string;
+  column?: { title: string };
 }
 
 interface MondayUpdate {
@@ -153,6 +155,7 @@ async function fetchDetailedMondayTask(taskId: string): Promise<MondayDetailedTa
             id
             type
             text
+            column { title }
           }
           updates(limit: 5) {
             text_body
@@ -166,6 +169,7 @@ async function fetchDetailedMondayTask(taskId: string): Promise<MondayDetailedTa
               id
               type
               text
+              column { title }
             }
           }
         }
@@ -250,7 +254,7 @@ function resolveTaskIdForBranch(branch: string): string | null {
 
 function getColumnValue(task: MondayDetailedTask, titleOrId: string): string {
   const col = task.column_values.find(
-    c => c.id === titleOrId || (c.title && c.title.toLowerCase() === titleOrId.toLowerCase())
+    c => c.id === titleOrId || (c.column?.title || '').toLowerCase() === titleOrId.toLowerCase()
   );
   return col?.text || '';
 }
@@ -395,7 +399,7 @@ class MondayTaskTreeProvider implements vscode.TreeDataProvider<MondayTaskItem> 
 
     // Description (from column_values - look for long text or text columns)
     const descriptionCol = task.column_values.find(
-      c => c.id === 'long_text' || c.id === 'text' || c.title.toLowerCase().includes('description') || c.title.toLowerCase().includes('notes')
+      c => c.id === 'long_text' || c.id === 'text' || (c.column?.title || "").toLowerCase().includes('description') || (c.column?.title || "").toLowerCase().includes('notes')
     );
     if (descriptionCol?.text) {
       const lines = descriptionCol.text.split('\n').filter(l => l.trim());
@@ -447,7 +451,7 @@ class MondayTaskTreeProvider implements vscode.TreeDataProvider<MondayTaskItem> 
     if (task.subitems && task.subitems.length > 0) {
       const subChildren = task.subitems.map(sub => {
         const subStatus = sub.column_values.find(
-          c => c.id.includes('status') || c.title.toLowerCase() === 'status'
+          c => c.id.includes('status') || (c.column?.title || "").toLowerCase() === 'status'
         )?.text || '';
         const isDone = subStatus.toLowerCase().includes('done') || subStatus.toLowerCase().includes('complete');
         return new MondayTaskItem(
@@ -503,7 +507,7 @@ function generateTaskMarkdown(task: MondayDetailedTask, url: string): string {
 
   // Description from column values
   const descriptionCol = task.column_values.find(
-    c => c.id === 'long_text' || c.id === 'text' || c.title.toLowerCase().includes('description') || c.title.toLowerCase().includes('notes')
+    c => c.id === 'long_text' || c.id === 'text' || (c.column?.title || "").toLowerCase().includes('description') || (c.column?.title || "").toLowerCase().includes('notes')
   );
   const description = descriptionCol?.text || '';
 
@@ -532,7 +536,7 @@ function generateTaskMarkdown(task: MondayDetailedTask, url: string): string {
     md += `\n## Sub-items\n\n`;
     for (const sub of task.subitems) {
       const subStatus = sub.column_values.find(
-        c => c.id.includes('status') || c.title.toLowerCase() === 'status'
+        c => c.id.includes('status') || (c.column?.title || "").toLowerCase() === 'status'
       )?.text || '';
       const isDone = subStatus.toLowerCase().includes('done') || subStatus.toLowerCase().includes('complete');
       md += `- [${isDone ? 'x' : ' '}] ${sub.name} (${subStatus || 'No status'})\n`;
@@ -544,7 +548,7 @@ function generateTaskMarkdown(task: MondayDetailedTask, url: string): string {
 
 function generateContextMarkdown(task: MondayDetailedTask, url: string): string {
   const descriptionCol = task.column_values.find(
-    c => c.id === 'long_text' || c.id === 'text' || c.title.toLowerCase().includes('description') || c.title.toLowerCase().includes('notes')
+    c => c.id === 'long_text' || c.id === 'text' || (c.column?.title || "").toLowerCase().includes('description') || (c.column?.title || "").toLowerCase().includes('notes')
   );
   const description = descriptionCol?.text || 'No description available.';
 
@@ -573,7 +577,7 @@ function generateContextMarkdown(task: MondayDetailedTask, url: string): string 
     md += `\n## Sub-tasks\n\n`;
     for (const sub of task.subitems) {
       const subStatus = sub.column_values.find(
-        c => c.id.includes('status') || c.title.toLowerCase() === 'status'
+        c => c.id.includes('status') || (c.column?.title || "").toLowerCase() === 'status'
       )?.text || '';
       const isDone = subStatus.toLowerCase().includes('done') || subStatus.toLowerCase().includes('complete');
       md += `- [${isDone ? 'x' : ' '}] ${sub.name}\n`;
