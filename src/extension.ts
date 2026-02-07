@@ -268,7 +268,7 @@ class MondayTaskItem extends vscode.TreeItem {
     public readonly children?: MondayTaskItem[],
     options?: {
       description?: string;
-      tooltip?: string;
+      tooltip?: string | vscode.MarkdownString;
       iconPath?: vscode.ThemeIcon;
       command?: vscode.Command;
       contextValue?: string;
@@ -342,30 +342,41 @@ class MondayTaskTreeProvider implements vscode.TreeDataProvider<MondayTaskItem> 
       }
     ));
 
-    // Status
+    // Status (colored by state)
     const status = getColumnValue(task, 'status9') || getColumnValue(task, 'Status') || getColumnValue(task, 'status');
     if (status) {
+      const statusLower = status.toLowerCase();
+      const statusColor = statusLower.includes('done') ? 'charts.green' 
+        : statusLower.includes('progress') ? 'charts.blue'
+        : statusLower.includes('review') ? 'charts.purple'
+        : statusLower.includes('stuck') || statusLower.includes('block') ? 'charts.red'
+        : 'charts.yellow';
       items.push(new MondayTaskItem(
         'Status',
         vscode.TreeItemCollapsibleState.None,
         undefined,
         {
           description: status,
-          iconPath: new vscode.ThemeIcon('circle-filled'),
+          iconPath: new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor(statusColor)),
         }
       ));
     }
 
-    // Priority
+    // Priority (colored by urgency)
     const priority = getColumnValue(task, 'dup__of_priority_mkkassyk') || getColumnValue(task, 'Priority') || getColumnValue(task, 'priority');
     if (priority) {
+      const prioLower = priority.toLowerCase();
+      const prioColor = prioLower.includes('critical') || prioLower.includes('p1') ? 'charts.red'
+        : prioLower.includes('urgent') || prioLower.includes('p2') ? 'charts.orange'
+        : prioLower.includes('medium') || prioLower.includes('p3') ? 'charts.yellow'
+        : 'charts.green';
       items.push(new MondayTaskItem(
         'Priority',
         vscode.TreeItemCollapsibleState.None,
         undefined,
         {
           description: priority,
-          iconPath: new vscode.ThemeIcon('flame'),
+          iconPath: new vscode.ThemeIcon('flame', new vscode.ThemeColor(prioColor)),
         }
       ));
     }
@@ -379,7 +390,7 @@ class MondayTaskTreeProvider implements vscode.TreeDataProvider<MondayTaskItem> 
         undefined,
         {
           description: person,
-          iconPath: new vscode.ThemeIcon('person'),
+          iconPath: new vscode.ThemeIcon('person', new vscode.ThemeColor('charts.green')),
         }
       ));
     }
@@ -392,7 +403,7 @@ class MondayTaskTreeProvider implements vscode.TreeDataProvider<MondayTaskItem> 
         undefined,
         {
           description: task.group.title,
-          iconPath: new vscode.ThemeIcon('folder'),
+          iconPath: new vscode.ThemeIcon('folder', new vscode.ThemeColor('charts.purple')),
         }
       ));
     }
@@ -425,27 +436,20 @@ class MondayTaskTreeProvider implements vscode.TreeDataProvider<MondayTaskItem> 
         const date = new Date(update.created_at).toLocaleDateString();
         const author = update.creator?.name || 'Unknown';
         const body = (update.text_body || '').trim();
-        // Split body into lines as children for readability
-        const bodyLines = body.split('\n').filter(l => l.trim());
-        const lineChildren = bodyLines.map(line => 
-          new MondayTaskItem(
-            line.trim(),
-            vscode.TreeItemCollapsibleState.None,
-            undefined,
-            {
-              tooltip: line.trim(),
-              iconPath: new vscode.ThemeIcon('dash'),
-            }
-          )
-        );
+        const fullText = `📝 ${author} — ${date}\n${'─'.repeat(40)}\n\n${body}`;
         return new MondayTaskItem(
           `${author} — ${date}`,
-          vscode.TreeItemCollapsibleState.Collapsed,
-          lineChildren,
+          vscode.TreeItemCollapsibleState.None,
+          undefined,
           {
-            description: body.substring(0, 60).replace(/\n/g, ' ') + (body.length > 60 ? '...' : ''),
-            tooltip: new vscode.MarkdownString(`**${author}** — ${date}\n\n${body}`),
-            iconPath: new vscode.ThemeIcon('comment'),
+            description: body.substring(0, 50).replace(/\n/g, ' ') + (body.length > 50 ? '...' : ''),
+            tooltip: new vscode.MarkdownString(`**${author}** — ${date}\n\n---\n\n${body.replace(/\n/g, '\n\n')}`),
+            iconPath: new vscode.ThemeIcon('comment', new vscode.ThemeColor('charts.blue')),
+            command: {
+              command: 'toggl-track-auto.openUpdate',
+              title: 'Open Update',
+              arguments: [fullText],
+            },
           }
         );
       });
@@ -473,7 +477,10 @@ class MondayTaskTreeProvider implements vscode.TreeDataProvider<MondayTaskItem> 
           undefined,
           {
             description: subStatus,
-            iconPath: new vscode.ThemeIcon(isDone ? 'pass-filled' : 'circle-outline'),
+            iconPath: new vscode.ThemeIcon(
+              isDone ? 'pass-filled' : 'circle-outline',
+              new vscode.ThemeColor(isDone ? 'charts.green' : subStatus.toLowerCase().includes('progress') ? 'charts.blue' : 'charts.yellow')
+            ),
             tooltip: `${sub.name} — ${subStatus}`,
           }
         );
@@ -2048,6 +2055,12 @@ export async function activate(context: vscode.ExtensionContext) {
     // Monday.com integration commands
     vscode.commands.registerCommand('toggl-track-auto.createBranchFromTask', () => createBranchFromTask()),
     vscode.commands.registerCommand('toggl-track-auto.copyMondayTaskLink', () => copyMondayTaskLink()),
+    // Open update in editor
+    vscode.commands.registerCommand('toggl-track-auto.openUpdate', async (text: string) => {
+      const doc = await vscode.workspace.openTextDocument({ content: text, language: 'markdown' });
+      await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
+    }),
+
     // New commands for v0.20.0
     vscode.commands.registerCommand('toggl-track-auto.refreshTaskContext', async () => {
       // Debug: show what we detect
