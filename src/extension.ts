@@ -151,7 +151,7 @@ async function fetchDetailedMondayTask(taskId: string): Promise<MondayDetailedTa
           group { title }
           column_values {
             id
-            title
+            type
             text
           }
           updates(limit: 5) {
@@ -164,7 +164,7 @@ async function fetchDetailedMondayTask(taskId: string): Promise<MondayDetailedTa
             name
             column_values {
               id
-              title
+              type
               text
             }
           }
@@ -250,7 +250,7 @@ function resolveTaskIdForBranch(branch: string): string | null {
 
 function getColumnValue(task: MondayDetailedTask, titleOrId: string): string {
   const col = task.column_values.find(
-    c => c.id === titleOrId || c.title.toLowerCase() === titleOrId.toLowerCase()
+    c => c.id === titleOrId || (c.title && c.title.toLowerCase() === titleOrId.toLowerCase())
   );
   return col?.text || '';
 }
