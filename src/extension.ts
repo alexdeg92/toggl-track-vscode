@@ -875,11 +875,9 @@ class MondaySidebarController {
     const task = await fetchDetailedMondayTask(taskId);
     if (task) {
       this.treeProvider.setTask(task, url);
-      this.webviewProvider?.setTask(task, url);
       await writeContextFiles(task, url);
     } else {
       this.treeProvider.setNoTask();
-      this.webviewProvider?.setNoTask();
       clearContextFiles();
     }
   }
@@ -2219,12 +2217,11 @@ export async function activate(context: vscode.ExtensionContext) {
   const mondaySidebarController = new MondaySidebarController(mondayTreeProvider);
   tracker.mondaySidebarController = mondaySidebarController;
 
-  // Register webview provider for rich sidebar
-  const mondayWebviewProvider = new MondayWebviewProvider(context.extensionUri);
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider('togglMondayWebview', mondayWebviewProvider)
-  );
-  mondaySidebarController.setWebviewProvider(mondayWebviewProvider);
+  const treeView = vscode.window.createTreeView('togglMondayTask', {
+    treeDataProvider: mondayTreeProvider,
+    showCollapseAll: true,
+  });
+  context.subscriptions.push(treeView);
 
   // Set context for view visibility (will be controlled by org check in tracker.start())
   vscode.commands.executeCommand('setContext', 'togglMondayTask.visible', true);
