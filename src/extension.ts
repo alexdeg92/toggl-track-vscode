@@ -204,6 +204,25 @@ function extractTaskIdFromBranch(branch: string): string | null {
 }
 
 async function getCurrentBranchName(): Promise<string | null> {
+  // Try VS Code's built-in Git extension API first (works in Cursor too)
+  try {
+    const gitExtension = vscode.extensions.getExtension('vscode.git');
+    if (gitExtension) {
+      const git = gitExtension.isActive ? gitExtension.exports : await gitExtension.activate();
+      const api = git.getAPI(1);
+      if (api && api.repositories.length > 0) {
+        const repo = api.repositories[0];
+        const head = repo.state?.HEAD;
+        if (head?.name) {
+          return head.name;
+        }
+      }
+    }
+  } catch {
+    // Fall through to exec fallback
+  }
+
+  // Fallback: exec git command
   const root = getWorkspaceRoot();
   if (!root) return null;
   try {
