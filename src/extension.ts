@@ -424,14 +424,27 @@ class MondayTaskTreeProvider implements vscode.TreeDataProvider<MondayTaskItem> 
       const updateChildren = task.updates.map(update => {
         const date = new Date(update.created_at).toLocaleDateString();
         const author = update.creator?.name || 'Unknown';
-        const preview = (update.text_body || '').substring(0, 100).replace(/\n/g, ' ');
+        const body = (update.text_body || '').trim();
+        // Split body into lines as children for readability
+        const bodyLines = body.split('\n').filter(l => l.trim());
+        const lineChildren = bodyLines.map(line => 
+          new MondayTaskItem(
+            line.trim(),
+            vscode.TreeItemCollapsibleState.None,
+            undefined,
+            {
+              tooltip: line.trim(),
+              iconPath: new vscode.ThemeIcon('dash'),
+            }
+          )
+        );
         return new MondayTaskItem(
           `${author} — ${date}`,
-          vscode.TreeItemCollapsibleState.None,
-          undefined,
+          vscode.TreeItemCollapsibleState.Collapsed,
+          lineChildren,
           {
-            description: preview,
-            tooltip: update.text_body || '',
+            description: body.substring(0, 60).replace(/\n/g, ' ') + (body.length > 60 ? '...' : ''),
+            tooltip: new vscode.MarkdownString(`**${author}** — ${date}\n\n${body}`),
             iconPath: new vscode.ThemeIcon('comment'),
           }
         );
