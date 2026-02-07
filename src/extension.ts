@@ -1362,7 +1362,7 @@ class TogglTracker {
     await this.checkBranch();
 
     // Check branch every 10 seconds
-    this.checkInterval = setInterval(() => this.checkBranch(), 10000);
+    this.checkInterval = setInterval(() => this.checkBranch(), 30000);
 
     // Check for idle every 30 seconds
     this.idleCheckInterval = setInterval(() => this.checkIdle(), 30000);
@@ -1608,21 +1608,24 @@ class TogglTracker {
       return;
     }
 
-    // Sync local state with Toggl (but don't prevent switching)
-    const currentTogglEntry = await this.getCurrentTogglEntry();
-    if (currentTogglEntry && currentTogglEntry.id) {
-      // Track what Toggl is currently running
-      this.currentEntryId = currentTogglEntry.id;
-      this.currentDescription = currentTogglEntry.description || '';
+    // Only call Toggl API when branch changes or no active entry (saves API quota)
+    if (branch === this.currentBranch && this.currentEntryId) {
+      return;
     }
 
     // Resume tracking if we were idle
     if (!this.currentEntryId && Date.now() - this.lastActivity < 30000) {
-      // Branch hasn't changed but we need to restart tracking
       this.currentBranch = ''; // Force restart
     }
 
     if (branch !== this.currentBranch) {
+      // Sync with Toggl only on branch change
+      const currentTogglEntry = await this.getCurrentTogglEntry();
+      if (currentTogglEntry && currentTogglEntry.id) {
+        this.currentEntryId = currentTogglEntry.id;
+        this.currentDescription = currentTogglEntry.description || '';
+      }
+
       this.currentBranch = branch;
       await this.stopCurrentEntry();
       await this.startNewEntry(branch);
