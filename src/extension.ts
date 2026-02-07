@@ -1362,7 +1362,7 @@ class TogglTracker {
     await this.checkBranch();
 
     // Check branch every 10 seconds
-    this.checkInterval = setInterval(() => this.checkBranch(), 30000);
+    this.checkInterval = setInterval(() => this.checkBranch(), 15000);
 
     // Check for idle every 30 seconds
     this.idleCheckInterval = setInterval(() => this.checkIdle(), 30000);
@@ -2014,13 +2014,26 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('toggl-track-auto.copyMondayTaskLink', () => copyMondayTaskLink()),
     // New commands for v0.20.0
     vscode.commands.registerCommand('toggl-track-auto.refreshTaskContext', async () => {
+      // Debug: show what we detect
+      const root = getWorkspaceRoot();
+      const branch = await getCurrentBranchName();
+      const taskId = branch ? resolveTaskIdForBranch(branch) : null;
+      const token = getMondayToken();
+
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Refreshing Monday.com task context...' },
         async () => {
           await mondaySidebarController.forceRefresh();
         }
       );
-      vscode.window.showInformationMessage('Monday.com task context refreshed.');
+
+      const debugInfo = [
+        `Root: ${root || 'NOT FOUND'}`,
+        `Branch: ${branch || 'NOT FOUND'}`,
+        `Task ID: ${taskId || 'NOT FOUND'}`,
+        `Monday Token: ${token ? 'SET (' + token.substring(0, 20) + '...)' : 'NOT SET'}`,
+      ].join(' | ');
+      vscode.window.showInformationMessage(`Monday refresh: ${debugInfo}`);
     }),
     vscode.commands.registerCommand('toggl-track-auto.refreshMondaySidebar', async () => {
       await mondaySidebarController.forceRefresh();
