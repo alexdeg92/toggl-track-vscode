@@ -739,15 +739,15 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
     if (!task) {
       return [
         '<!DOCTYPE html><html><head><style>',
-        'body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 12px; }',
-        '.empty { opacity: 0.6; text-align: center; margin-top: 20px; }',
+        'body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 16px; font-size: 13px; }',
+        '.empty { opacity: 0.5; text-align: center; margin-top: 30px; }',
         '</style></head><body>',
-        '<p class="empty">No Monday.com task linked to the current branch.</p>',
+        '<p class="empty">No Monday.com task linked<br>to the current branch.</p>',
         '</body></html>'
       ].join('\n');
     }
 
-    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
     const status = getColumnValue(task, 'status9') || getColumnValue(task, 'Status') || '';
     const priority = getColumnValue(task, 'dup__of_priority_mkkassyk') || getColumnValue(task, 'Priority') || '';
@@ -758,113 +758,110 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
       : status.toLowerCase().includes('progress') ? '#2196f3'
       : status.toLowerCase().includes('review') ? '#9c27b0'
       : status.toLowerCase().includes('stuck') ? '#f44336' : '#ff9800';
-
     const prioColor = priority.toLowerCase().includes('critical') || priority.toLowerCase().includes('p1') ? '#f44336'
       : priority.toLowerCase().includes('urgent') || priority.toLowerCase().includes('p2') ? '#ff9800'
       : priority.toLowerCase().includes('medium') ? '#ffeb3b' : '#4caf50';
 
-    // Build updates HTML
-    const updatesArr: string[] = [];
+    // Meta rows
+    const metaRows: string[] = [];
+    if (status) metaRows.push('<div class="meta-row"><span class="dot" style="background:' + statusColor + '"></span><span class="meta-label">Status</span><span class="meta-val">' + esc(status) + '</span></div>');
+    if (priority) metaRows.push('<div class="meta-row"><span class="icon">\u{1F525}</span><span class="meta-label">Priority</span><span class="meta-val" style="color:' + prioColor + '">' + esc(priority) + '</span></div>');
+    if (person) metaRows.push('<div class="meta-row"><span class="icon">\u{1F464}</span><span class="meta-label">Assigned</span><span class="meta-val">' + esc(person) + '</span></div>');
+    if (group) metaRows.push('<div class="meta-row"><span class="icon">\u{1F4C1}</span><span class="meta-label">Group</span><span class="meta-val" style="color:#9c27b0">' + esc(group) + '</span></div>');
+
+    // Updates
+    const updatesHtml: string[] = [];
     if (task.updates && task.updates.length > 0) {
       task.updates.forEach((u, i) => {
         const date = new Date(u.created_at).toLocaleDateString();
         const author = u.creator?.name || 'Unknown';
         const body = esc(u.text_body || '').replace(/\n/g, '<br>');
-
-        // Assets
-        const assetParts: string[] = [];
+        const assetsArr: string[] = [];
         if (u.assets && u.assets.length > 0) {
           u.assets.forEach(a => {
             const ext = (a.file_extension || '').toLowerCase();
             const aUrl = a.public_url || a.url;
             if (['png','jpg','jpeg','gif','webp','svg'].includes(ext)) {
-              assetParts.push('<div class="asset"><img src="' + aUrl + '" alt="' + esc(a.name) + '" style="max-width:100%;border-radius:4px;margin:4px 0;" /></div>');
+              assetsArr.push('<img src="' + aUrl + '" alt="' + esc(a.name) + '" />');
             } else if (['mp4','webm','mov'].includes(ext)) {
-              assetParts.push('<div class="asset"><video src="' + aUrl + '" controls style="max-width:100%;border-radius:4px;margin:4px 0;"></video></div>');
+              assetsArr.push('<video src="' + aUrl + '" controls></video>');
             } else {
-              assetParts.push('<div class="asset"><a href="' + aUrl + '">\u{1F4CE} ' + esc(a.name) + '</a></div>');
+              assetsArr.push('<a href="' + aUrl + '">\u{1F4CE} ' + esc(a.name) + '</a>');
             }
           });
         }
-
-        updatesArr.push(
+        updatesHtml.push(
           '<div class="update">' +
-          '<div class="update-header" onclick="toggle(\'upd' + i + '\')">' +
-          '<span class="arrow" id="arrow' + i + '">\u25B6</span>' +
-          '<strong style="color: #64b5f6;">' + esc(author) + '</strong>' +
+          '<div class="update-hdr" onclick="tog(' + i + ')">' +
+          '<span class="arr" id="a' + i + '">\u25B6</span>' +
+          '<span class="author">' + esc(author) + '</span>' +
           '<span class="date">' + date + '</span>' +
           '</div>' +
-          '<div class="update-body" id="upd' + i + '" style="display:none;">' +
-          body + assetParts.join('') +
+          '<div class="update-body" id="u' + i + '">' +
+          body + (assetsArr.length ? '<div class="assets">' + assetsArr.join('') + '</div>' : '') +
           '</div></div>'
         );
       });
     }
 
-    // Build sub-items HTML
-    const subParts: string[] = [];
+    // Sub-items
+    const subHtml: string[] = [];
     if (task.subitems && task.subitems.length > 0) {
       task.subitems.forEach(sub => {
         const subStatus = sub.column_values.find(c => c.id.includes('status') || (c.column?.title || '').toLowerCase() === 'status')?.text || '';
         const isDone = subStatus.toLowerCase().includes('done');
         const isProgress = subStatus.toLowerCase().includes('progress');
-        const dotColor = isDone ? '#4caf50' : isProgress ? '#2196f3' : '#ff9800';
         const icon = isDone ? '\u2705' : isProgress ? '\u{1F535}' : '\u2B55';
-        subParts.push(
-          '<div class="subitem">' + icon + ' <span>' + esc(sub.name) + '</span>' +
-          '<span class="sub-status" style="color:' + dotColor + '">' + esc(subStatus) + '</span></div>'
+        const color = isDone ? '#4caf50' : isProgress ? '#2196f3' : '#ff9800';
+        subHtml.push(
+          '<div class="sub-row">' +
+          '<span>' + icon + '</span>' +
+          '<span class="sub-name">' + esc(sub.name) + '</span>' +
+          '<span class="sub-status" style="color:' + color + '">' + esc(subStatus) + '</span>' +
+          '</div>'
         );
       });
     }
 
-    // Badges
-    const badges: string[] = [];
-    if (status) badges.push('<span class="badge" style="background:' + statusColor + '22;color:' + statusColor + ';border:1px solid ' + statusColor + '44">\u25CF ' + esc(status) + '</span>');
-    if (priority) badges.push('<span class="badge" style="background:' + prioColor + '22;color:' + prioColor + ';border:1px solid ' + prioColor + '44">\u{1F525} ' + esc(priority) + '</span>');
-    if (person) badges.push('<span class="badge" style="background:#4caf5022;color:#4caf50;border:1px solid #4caf5044">\u{1F464} ' + esc(person) + '</span>');
-    if (group) badges.push('<span class="badge" style="background:#9c27b022;color:#9c27b0;border:1px solid #9c27b044">\u{1F4C1} ' + esc(group) + '</span>');
-
-    const parts: string[] = [
+    return [
       '<!DOCTYPE html><html><head><style>',
-      'body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 8px; font-size: 12px; line-height: 1.5; }',
-      '.task-name { font-size: 14px; font-weight: bold; margin-bottom: 10px; }',
-      '.task-id { opacity: 0.5; font-size: 11px; }',
-      '.meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }',
-      '.badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }',
-      '.section { margin: 12px 0 6px; font-weight: bold; font-size: 12px; color: var(--vscode-descriptionForeground); border-bottom: 1px solid var(--vscode-widget-border); padding-bottom: 4px; }',
-      '.update { margin: 6px 0; border-left: 2px solid #64b5f6; padding-left: 8px; }',
-      '.update-header { cursor: pointer; padding: 4px 0; display: flex; align-items: center; gap: 6px; }',
-      '.update-header:hover { background: var(--vscode-list-hoverBackground); border-radius: 3px; }',
-      '.arrow { font-size: 10px; transition: transform 0.2s; display: inline-block; width: 12px; }',
-      '.arrow.open { transform: rotate(90deg); }',
-      '.date { opacity: 0.5; font-size: 11px; margin-left: auto; }',
-      '.update-body { padding: 6px 0 6px 18px; font-size: 12px; opacity: 0.9; word-break: break-word; }',
-      '.subitem { padding: 3px 0; display: flex; align-items: center; gap: 6px; font-size: 12px; }',
-      '.sub-status { opacity: 0.7; font-size: 11px; margin-left: auto; }',
-      'a { color: #64b5f6; }',
-      '.open-link { display: block; text-align: center; margin-top: 12px; padding: 6px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-radius: 3px; text-decoration: none; font-size: 12px; }',
-      '.open-link:hover { background: var(--vscode-button-hoverBackground); }',
-      'img { cursor: pointer; }',
+      '* { box-sizing: border-box; margin: 0; padding: 0; }',
+      'body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 10px; font-size: 12px; line-height: 1.6; overflow-x: hidden; }',
+      '.task-title { font-size: 13px; font-weight: 600; padding: 4px 0 8px; border-bottom: 1px solid var(--vscode-widget-border); margin-bottom: 8px; }',
+      '.task-id { opacity: 0.4; font-size: 11px; font-weight: normal; }',
+      '.meta-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 12px; }',
+      '.meta-label { opacity: 0.5; min-width: 55px; }',
+      '.meta-val { font-weight: 500; }',
+      '.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }',
+      '.icon { width: 14px; text-align: center; flex-shrink: 0; font-size: 11px; }',
+      '.section { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vscode-descriptionForeground); margin: 14px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--vscode-widget-border); }',
+      '.update { margin: 0 0 2px; border-left: 2px solid #64b5f6; }',
+      '.update-hdr { display: flex; align-items: center; gap: 6px; padding: 5px 8px; cursor: pointer; border-radius: 3px; }',
+      '.update-hdr:hover { background: var(--vscode-list-hoverBackground); }',
+      '.arr { font-size: 9px; transition: transform 0.15s; display: inline-block; opacity: 0.5; }',
+      '.arr.open { transform: rotate(90deg); }',
+      '.author { font-weight: 600; color: #64b5f6; font-size: 12px; }',
+      '.date { margin-left: auto; opacity: 0.4; font-size: 11px; }',
+      '.update-body { display: none; padding: 6px 12px 10px 20px; font-size: 12px; line-height: 1.7; word-wrap: break-word; overflow-wrap: break-word; color: var(--vscode-foreground); opacity: 0.85; }',
+      '.update-body img { max-width: 100%; border-radius: 4px; margin: 6px 0; }',
+      '.update-body video { max-width: 100%; border-radius: 4px; margin: 6px 0; }',
+      '.assets { margin-top: 8px; }',
+      '.sub-row { display: flex; align-items: center; gap: 6px; padding: 3px 4px; font-size: 12px; }',
+      '.sub-name { flex: 1; }',
+      '.sub-status { opacity: 0.6; font-size: 11px; white-space: nowrap; }',
+      'a { color: #64b5f6; text-decoration: none; }',
+      'a:hover { text-decoration: underline; }',
+      '.open-btn { display: block; text-align: center; margin: 14px 0 4px; padding: 6px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-radius: 3px; text-decoration: none; font-size: 12px; }',
+      '.open-btn:hover { background: var(--vscode-button-hoverBackground); text-decoration: none; }',
       '</style></head><body>',
-      '<div class="task-name">' + esc(task.name) + ' <span class="task-id">#' + task.id + '</span></div>',
-      '<div class="meta">' + badges.join('') + '</div>',
-    ];
-
-    if (updatesArr.length > 0) {
-      parts.push('<div class="section">\u{1F4AC} Updates (' + task.updates.length + ')</div>');
-      parts.push(...updatesArr);
-    }
-
-    if (subParts.length > 0) {
-      parts.push('<div class="section">\u{1F4CB} Sub-Items (' + task.subitems.length + ')</div>');
-      parts.push(...subParts);
-    }
-
-    parts.push('<a class="open-link" href="' + this._url + '">Open in Monday.com \u2197</a>');
-    parts.push('<script>function toggle(id){var el=document.getElementById(id);var idx=id.replace("upd","");var arrow=document.getElementById("arrow"+idx);if(el.style.display==="none"){el.style.display="block";arrow.classList.add("open");}else{el.style.display="none";arrow.classList.remove("open");}}</script>');
-    parts.push('</body></html>');
-
-    return parts.join('\n');
+      '<div class="task-title">' + esc(task.name) + ' <span class="task-id">#' + task.id + '</span></div>',
+      metaRows.join('\n'),
+      updatesHtml.length ? '<div class="section">\u{1F4AC} Updates (' + task.updates.length + ')</div>' + updatesHtml.join('\n') : '',
+      subHtml.length ? '<div class="section">\u{1F4CB} Sub-Items (' + task.subitems.length + ')</div>' + subHtml.join('\n') : '',
+      '<a class="open-btn" href="' + this._url + '">Open in Monday.com \u2197</a>',
+      '<script>function tog(i){var e=document.getElementById("u"+i),a=document.getElementById("a"+i);if(e.style.display==="block"){e.style.display="none";a.classList.remove("open")}else{e.style.display="block";a.classList.add("open")}}</script>',
+      '</body></html>'
+    ].join('\n');
   }
 }
 
@@ -915,9 +912,11 @@ class MondaySidebarController {
     const task = await fetchDetailedMondayTask(taskId);
     if (task) {
       this.treeProvider.setTask(task, url);
+      this.webviewProvider?.setTask(task, url);
       await writeContextFiles(task, url);
     } else {
       this.treeProvider.setNoTask();
+      this.webviewProvider?.setNoTask();
       clearContextFiles();
     }
   }
@@ -2257,11 +2256,12 @@ export async function activate(context: vscode.ExtensionContext) {
   const mondaySidebarController = new MondaySidebarController(mondayTreeProvider);
   tracker.mondaySidebarController = mondaySidebarController;
 
-  const treeView = vscode.window.createTreeView('togglMondayTask', {
-    treeDataProvider: mondayTreeProvider,
-    showCollapseAll: true,
-  });
-  context.subscriptions.push(treeView);
+  // Rich webview sidebar
+  const mondayWebviewProvider = new MondayWebviewProvider(context.extensionUri);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider('togglMondayWebview', mondayWebviewProvider)
+  );
+  mondaySidebarController.setWebviewProvider(mondayWebviewProvider);
 
   // Set context for view visibility (will be controlled by org check in tracker.start())
   vscode.commands.executeCommand('setContext', 'togglMondayTask.visible', true);
