@@ -778,6 +778,7 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
     }
 
     const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const avatarColors = ['#0073ea','#00c875','#e2445c','#fdab3d','#a25ddc','#579bfc','#ff158a','#ff5ac4','#cab641','#00d2d2'];
 
     const status = getColumnValue(task, 'status9') || getColumnValue(task, 'Status') || '';
     const priority = getColumnValue(task, 'dup__of_priority_mkkassyk') || getColumnValue(task, 'Priority') || '';
@@ -830,7 +831,7 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
             const rBody = esc(r.text_body || '').replace(/\n/g, '<br>');
             let rHash = 0;
             for (let rc = 0; rc < rAuthor.length; rc++) rHash = rAuthor.charCodeAt(rc) + ((rHash << 5) - rHash);
-            const rColor = colors[Math.abs(rHash) % colors.length];
+            const rColor = avatarColors[Math.abs(rHash) % avatarColors.length];
             const rInitials = rAuthor.split(' ').map((w: string) => w[0]).join('').substring(0, 2).toUpperCase();
             const rAvatarHtml = rPhoto
               ? '<img class="avatar-sm" src="' + rPhoto + '" />'
@@ -844,10 +845,9 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
         }
 
         // Avatar: use photo or colored initials
-        const colors = ['#0073ea','#00c875','#e2445c','#fdab3d','#a25ddc','#579bfc','#ff158a','#ff5ac4','#cab641','#00d2d2'];
         let hash = 0;
         for (let c = 0; c < author.length; c++) hash = author.charCodeAt(c) + ((hash << 5) - hash);
-        const avatarColor = colors[Math.abs(hash) % colors.length];
+        const avatarColor = avatarColors[Math.abs(hash) % avatarColors.length];
         const initials = author.split(' ').map((w: string) => w[0]).join('').substring(0, 2).toUpperCase();
         const photoUrl = u.creator?.photo_thumb_small;
         const avatarHtml = photoUrl
