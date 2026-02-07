@@ -446,26 +446,33 @@ class MondayTaskTreeProvider implements vscode.TreeDataProvider<MondayTaskItem> 
       ));
     }
 
-    // Updates
+    // Updates — expand below to show full content
     if (task.updates && task.updates.length > 0) {
       const updateChildren = task.updates.map(update => {
         const date = new Date(update.created_at).toLocaleDateString();
         const author = update.creator?.name || 'Unknown';
         const body = (update.text_body || '').trim();
-        const fullText = `📝 ${author} — ${date}\n${'─'.repeat(40)}\n\n${body}`;
+        // Each line of the update body becomes a child item
+        const bodyLines = body.split('\n').filter((l: string) => l.trim());
+        const lineChildren = bodyLines.map((line: string) =>
+          new MondayTaskItem(
+            line.trim(),
+            vscode.TreeItemCollapsibleState.None,
+            undefined,
+            {
+              tooltip: new vscode.MarkdownString(line.trim()),
+              iconPath: new vscode.ThemeIcon('dash', new vscode.ThemeColor('charts.blue')),
+            }
+          )
+        );
         return new MondayTaskItem(
           `${author} — ${date}`,
-          vscode.TreeItemCollapsibleState.None,
-          undefined,
+          vscode.TreeItemCollapsibleState.Collapsed,
+          lineChildren,
           {
-            description: body.substring(0, 50).replace(/\n/g, ' ') + (body.length > 50 ? '...' : ''),
+            description: body.substring(0, 60).replace(/\n/g, ' ') + (body.length > 60 ? '...' : ''),
             tooltip: new vscode.MarkdownString(`**${author}** — ${date}\n\n---\n\n${body.replace(/\n/g, '\n\n')}`),
             iconPath: new vscode.ThemeIcon('comment', new vscode.ThemeColor('charts.blue')),
-            command: {
-              command: 'toggl-track-auto.openUpdate',
-              title: 'Open Update',
-              arguments: [fullText],
-            },
           }
         );
       });
