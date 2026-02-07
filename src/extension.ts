@@ -817,12 +817,20 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
           repliesHtml = '<div class="replies">' + replyParts.join('') + '</div>';
         }
 
+        // Generate avatar color from author name
+        const colors = ['#6366f1','#ec4899','#f59e0b','#22c55e','#3b82f6','#ef4444','#8b5cf6','#14b8a6','#f97316','#06b6d4'];
+        let hash = 0;
+        for (let c = 0; c < author.length; c++) hash = author.charCodeAt(c) + ((hash << 5) - hash);
+        const avatarColor = colors[Math.abs(hash) % colors.length];
+        const initials = author.split(' ').map((w: string) => w[0]).join('').substring(0, 2).toUpperCase();
+
         updatesHtml.push(
           '<div class="update">' +
           '<div class="update-hdr" onclick="tog(' + i + ')">' +
           '<span class="arr" id="a' + i + '">\u25B6</span>' +
-          '<span class="author">' + esc(author) + '</span>' +
-          (u.replies && u.replies.length ? '<span class="reply-count">' + u.replies.length + ' \u{1F4AC}</span>' : '') +
+          '<span class="avatar" style="background:' + avatarColor + '">' + initials + '</span>' +
+          '<span class="author" style="color:' + avatarColor + '">' + esc(author) + '</span>' +
+          (u.replies && u.replies.length ? '<span class="reply-badge">' + u.replies.length + ' replies</span>' : '') +
           '<span class="date">' + date + '</span>' +
           '</div>' +
           '<div class="update-body" id="u' + i + '">' +
@@ -855,44 +863,67 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
 
     return [
       '<!DOCTYPE html><html><head><style>',
+      ':root { --card-bg: rgba(255,255,255,0.03); --card-border: rgba(255,255,255,0.06); --accent: #6366f1; --accent2: #a78bfa; --green: #22c55e; --blue: #3b82f6; --orange: #f59e0b; --red: #ef4444; }',
       '* { box-sizing: border-box; margin: 0; padding: 0; }',
-      'body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 10px; font-size: 12px; line-height: 1.6; overflow-x: hidden; }',
-      '.task-title { font-size: 13px; font-weight: 600; padding: 4px 0 8px; border-bottom: 1px solid var(--vscode-widget-border); margin-bottom: 8px; }',
-      '.task-id { opacity: 0.4; font-size: 11px; font-weight: normal; }',
-      '.meta-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 12px; }',
-      '.meta-label { opacity: 0.5; min-width: 55px; }',
-      '.meta-val { font-weight: 500; }',
-      '.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }',
-      '.icon { width: 14px; text-align: center; flex-shrink: 0; font-size: 11px; }',
-      '.section { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vscode-descriptionForeground); margin: 14px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--vscode-widget-border); }',
-      '.update { margin: 0 0 2px; border-left: 2px solid #64b5f6; }',
-      '.update-hdr { display: flex; align-items: center; gap: 6px; padding: 5px 8px; cursor: pointer; border-radius: 3px; }',
-      '.update-hdr:hover { background: var(--vscode-list-hoverBackground); }',
-      '.arr { font-size: 9px; transition: transform 0.15s; display: inline-block; opacity: 0.5; }',
-      '.arr.open { transform: rotate(90deg); }',
-      '.author { font-weight: 600; color: #64b5f6; font-size: 12px; }',
-      '.date { margin-left: auto; opacity: 0.4; font-size: 11px; }',
-      '.update-body { display: none; padding: 6px 12px 10px 20px; font-size: 12px; line-height: 1.7; word-wrap: break-word; overflow-wrap: break-word; color: var(--vscode-foreground); opacity: 0.85; }',
-      '.update-body img { max-width: 100%; border-radius: 4px; margin: 6px 0; }',
-      '.update-body video { max-width: 100%; border-radius: 4px; margin: 6px 0; }',
+      'body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 12px; font-size: 12px; line-height: 1.55; overflow-x: hidden; }',
+      '',
+      '/* Header */',
+      '.task-title { font-size: 14px; font-weight: 700; padding: 0 0 10px; margin-bottom: 10px; letter-spacing: -0.2px; }',
+      '.task-id { opacity: 0.3; font-size: 11px; font-weight: 400; }',
+      '',
+      '/* Meta badges */',
+      '.meta { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 14px; }',
+      '.badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; background: var(--card-bg); border: 1px solid var(--card-border); }',
+      '.badge .dot { width: 7px; height: 7px; border-radius: 50%; }',
+      '',
+      '/* Section headers */',
+      '.section { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: var(--vscode-descriptionForeground); margin: 16px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--card-border); }',
+      '.section .count { font-weight: 400; opacity: 0.5; }',
+      '',
+      '/* Update cards */',
+      '.update { margin: 0 0 4px; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 6px; overflow: hidden; }',
+      '.update-hdr { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; }',
+      '.update-hdr:hover { background: rgba(255,255,255,0.04); }',
+      '.avatar { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: #fff; flex-shrink: 0; }',
+      '.arr { font-size: 8px; transition: transform 0.2s; opacity: 0.3; }',
+      '.arr.open { transform: rotate(90deg); opacity: 0.6; }',
+      '.author { font-weight: 600; font-size: 12px; }',
+      '.date { margin-left: auto; opacity: 0.3; font-size: 10px; }',
+      '.reply-badge { font-size: 9px; padding: 1px 6px; border-radius: 10px; background: rgba(99,102,241,0.15); color: var(--accent2); }',
+      '.update-body { display: none; padding: 0 12px 12px 42px; font-size: 12px; line-height: 1.7; word-wrap: break-word; overflow-wrap: break-word; opacity: 0.8; }',
+      '.update-body img { max-width: 100%; border-radius: 6px; margin: 8px 0; }',
+      '.update-body video { max-width: 100%; border-radius: 6px; margin: 8px 0; }',
       '.assets { margin-top: 8px; }',
-      '.replies { margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--vscode-widget-border); }',
-      '.reply { margin: 6px 0; padding: 6px 10px; background: var(--vscode-editor-inactiveSelectionBackground); border-radius: 4px; border-left: 2px solid #9c27b0; }',
-      '.reply-hdr { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }',
-      '.reply-body { font-size: 12px; line-height: 1.6; word-wrap: break-word; opacity: 0.85; }',
-      '.reply-count { font-size: 10px; opacity: 0.5; }',
-      '.sub-row { display: flex; align-items: center; gap: 6px; padding: 3px 4px; font-size: 12px; }',
+      '',
+      '/* Replies */',
+      '.replies { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--card-border); }',
+      '.reply { margin: 6px 0; padding: 8px 10px; background: rgba(167,139,250,0.06); border-radius: 6px; border-left: 3px solid var(--accent2); }',
+      '.reply-hdr { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }',
+      '.reply .author { font-size: 11px; color: var(--accent2); }',
+      '.reply .date { font-size: 10px; }',
+      '.reply-body { font-size: 12px; line-height: 1.65; word-wrap: break-word; opacity: 0.8; }',
+      '',
+      '/* Sub-items */',
+      '.sub-row { display: flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 4px; font-size: 12px; }',
+      '.sub-row:hover { background: rgba(255,255,255,0.03); }',
       '.sub-name { flex: 1; }',
-      '.sub-status { opacity: 0.6; font-size: 11px; white-space: nowrap; }',
-      'a { color: #64b5f6; text-decoration: none; }',
+      '.sub-status { opacity: 0.5; font-size: 10px; white-space: nowrap; padding: 1px 8px; border-radius: 10px; background: var(--card-bg); }',
+      '',
+      '/* Links & buttons */',
+      'a { color: var(--accent); text-decoration: none; }',
       'a:hover { text-decoration: underline; }',
-      '.open-btn { display: block; text-align: center; margin: 14px 0 4px; padding: 6px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-radius: 3px; text-decoration: none; font-size: 12px; }',
-      '.open-btn:hover { background: var(--vscode-button-hoverBackground); text-decoration: none; }',
+      '.open-btn { display: block; text-align: center; margin: 16px 0 4px; padding: 8px; background: var(--accent); color: #fff; border-radius: 6px; text-decoration: none; font-size: 12px; font-weight: 600; letter-spacing: 0.3px; }',
+      '.open-btn:hover { opacity: 0.9; text-decoration: none; }',
       '</style></head><body>',
       '<div class="task-title">' + esc(task.name) + ' <span class="task-id">#' + task.id + '</span></div>',
-      metaRows.join('\n'),
-      updatesHtml.length ? '<div class="section">\u{1F4AC} Updates (' + task.updates.length + ')</div>' + updatesHtml.join('\n') : '',
-      subHtml.length ? '<div class="section">\u{1F4CB} Sub-Items (' + task.subitems.length + ')</div>' + subHtml.join('\n') : '',
+      '<div class="meta">' +
+        (status ? '<span class="badge"><span class="dot" style="background:' + statusColor + '"></span>' + esc(status) + '</span>' : '') +
+        (priority ? '<span class="badge" style="color:' + prioColor + '"><span class="dot" style="background:' + prioColor + '"></span>' + esc(priority) + '</span>' : '') +
+        (person ? '<span class="badge">\u{1F464} ' + esc(person) + '</span>' : '') +
+        (group ? '<span class="badge" style="color:var(--accent2)">\u{1F4C1} ' + esc(group) + '</span>' : '') +
+      '</div>',
+      updatesHtml.length ? '<div class="section">\u{1F4AC} Updates <span class="count">(' + task.updates.length + ')</span></div>' + updatesHtml.join('\n') : '',
+      subHtml.length ? '<div class="section">\u{1F4CB} Sub-Items <span class="count">(' + task.subitems.length + ')</span></div>' + subHtml.join('\n') : '',
       '<a class="open-btn" href="' + this._url + '">Open in Monday.com \u2197</a>',
       '<script>function tog(i){var e=document.getElementById("u"+i),a=document.getElementById("a"+i);if(e.style.display==="block"){e.style.display="none";a.classList.remove("open")}else{e.style.display="block";a.classList.add("open")}}</script>',
       '</body></html>'
