@@ -50,11 +50,18 @@ interface MondayAsset {
   public_url?: string;
 }
 
+interface MondayReply {
+  text_body: string;
+  created_at: string;
+  creator: { name: string };
+}
+
 interface MondayUpdate {
   text_body: string;
   created_at: string;
   creator: { name: string };
   assets?: MondayAsset[];
+  replies?: MondayReply[];
 }
 
 interface MondaySubItem {
@@ -176,6 +183,11 @@ async function fetchDetailedMondayTask(taskId: string): Promise<MondayDetailedTa
               url
               file_extension
               public_url
+            }
+            replies {
+              text_body
+              created_at
+              creator { name }
             }
           }
           subitems {
@@ -790,15 +802,33 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
             }
           });
         }
+        // Replies thread
+        let repliesHtml = '';
+        if (u.replies && u.replies.length > 0) {
+          const replyParts = u.replies.map(r => {
+            const rDate = new Date(r.created_at).toLocaleDateString();
+            const rAuthor = r.creator?.name || 'Unknown';
+            const rBody = esc(r.text_body || '').replace(/\n/g, '<br>');
+            return '<div class="reply">' +
+              '<div class="reply-hdr"><span class="author">' + esc(rAuthor) + '</span><span class="date">' + rDate + '</span></div>' +
+              '<div class="reply-body">' + rBody + '</div>' +
+              '</div>';
+          });
+          repliesHtml = '<div class="replies">' + replyParts.join('') + '</div>';
+        }
+
         updatesHtml.push(
           '<div class="update">' +
           '<div class="update-hdr" onclick="tog(' + i + ')">' +
           '<span class="arr" id="a' + i + '">\u25B6</span>' +
           '<span class="author">' + esc(author) + '</span>' +
+          (u.replies && u.replies.length ? '<span class="reply-count">' + u.replies.length + ' \u{1F4AC}</span>' : '') +
           '<span class="date">' + date + '</span>' +
           '</div>' +
           '<div class="update-body" id="u' + i + '">' +
-          body + (assetsArr.length ? '<div class="assets">' + assetsArr.join('') + '</div>' : '') +
+          body +
+          (assetsArr.length ? '<div class="assets">' + assetsArr.join('') + '</div>' : '') +
+          repliesHtml +
           '</div></div>'
         );
       });
@@ -846,6 +876,11 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
       '.update-body img { max-width: 100%; border-radius: 4px; margin: 6px 0; }',
       '.update-body video { max-width: 100%; border-radius: 4px; margin: 6px 0; }',
       '.assets { margin-top: 8px; }',
+      '.replies { margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--vscode-widget-border); }',
+      '.reply { margin: 6px 0; padding: 6px 10px; background: var(--vscode-editor-inactiveSelectionBackground); border-radius: 4px; border-left: 2px solid #9c27b0; }',
+      '.reply-hdr { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }',
+      '.reply-body { font-size: 12px; line-height: 1.6; word-wrap: break-word; opacity: 0.85; }',
+      '.reply-count { font-size: 10px; opacity: 0.5; }',
       '.sub-row { display: flex; align-items: center; gap: 6px; padding: 3px 4px; font-size: 12px; }',
       '.sub-name { flex: 1; }',
       '.sub-status { opacity: 0.6; font-size: 11px; white-space: nowrap; }',
