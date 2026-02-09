@@ -732,6 +732,10 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
 
     // Handle messages from webview
     webviewView.webview.onDidReceiveMessage(async (msg) => {
+      if (msg.type === 'remapTask') {
+        vscode.commands.executeCommand('toggl-track-auto.remapBranchTask');
+        return;
+      }
       if (msg.type === 'postComment' && this._task) {
         const token = getMondayToken();
         if (!token) {
@@ -815,6 +819,8 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
         '.empty { opacity: 0.5; text-align: center; margin-top: 30px; }',
         '</style></head><body>',
         '<p class="empty">No Monday.com task linked<br>to the current branch.</p>',
+        '<script>const vscode = acquireVsCodeApi();</script>',
+        '<button style="display:block;width:80%;margin:20px auto;padding:10px;background:#0073ea;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;" onclick="vscode.postMessage({type:\'remapTask\'})">🔗 Link Monday Task</button>',
         '</body></html>'
       ].join('\n');
     }
@@ -1013,6 +1019,8 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
       '.reply-status { font-size: 11px; margin-top: 4px; }',
       '.reply-status.ok { color: var(--monday-green); }',
       '.reply-status.err { color: var(--monday-red); }',
+      '.remap-btn { display: block; width: 100%; text-align: center; margin: 14px 0 6px; padding: 8px; background: transparent; color: var(--monday-text2); border: 1px dashed var(--monday-border); border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s; font-family: inherit; }',
+      '.remap-btn:hover { background: rgba(0,115,234,0.08); color: var(--monday-blue); border-color: var(--monday-blue); }',
       '</style></head><body>',
       '<div class="task-title">' + esc(task.name) + ' <span class="task-id">#' + task.id + '</span></div>',
       '<div class="meta">' +
@@ -1023,6 +1031,7 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
       '</div>',
       updatesHtml.length ? '<div class="section">\u{1F4AC} Updates <span class="count">(' + task.updates.length + ')</span></div>' + updatesHtml.join('\n') : '',
       subHtml.length ? '<div class="section">\u{1F4CB} Sub-Items <span class="count">(' + task.subitems.length + ')</span></div>' + subHtml.join('\n') : '',
+      '<button class="remap-btn" onclick="vscode.postMessage({type:\'remapTask\'})">🔄 Remap Branch to Different Task</button>',
       '<a class="open-btn" href="' + this._url + '">Open in Monday.com \u2197</a>',
       '<script>',
       'const vscode = acquireVsCodeApi();',
