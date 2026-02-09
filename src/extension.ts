@@ -268,14 +268,14 @@ async function getCurrentBranchName(): Promise<string | null> {
 }
 
 function resolveTaskIdForBranch(branch: string): string | null {
-  // First try branch name pattern
-  const fromBranch = extractTaskIdFromBranch(branch);
-  if (fromBranch) return fromBranch;
-
-  // Fallback: check .vscode/monday-tasks.json mapping
+  // First check explicit mapping override in .vscode/monday-tasks.json
   const mappings = readBranchTaskMappings();
   const mapping = mappings[branch];
   if (mapping?.taskId) return mapping.taskId;
+
+  // Fallback: extract task ID from branch name pattern
+  const fromBranch = extractTaskIdFromBranch(branch);
+  if (fromBranch) return fromBranch;
 
   return null;
 }
