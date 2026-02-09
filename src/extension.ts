@@ -57,6 +57,7 @@ interface MondayReply {
 }
 
 interface MondayUpdate {
+  id: string;
   text_body: string;
   created_at: string;
   creator: { name: string; photo_thumb_small?: string };
@@ -174,6 +175,7 @@ async function fetchDetailedMondayTask(taskId: string): Promise<MondayDetailedTa
             column { title }
           }
           updates(limit: 10) {
+            id
             text_body
             created_at
             creator { name photo_thumb_small }
@@ -733,24 +735,32 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
       if (msg.type === 'postComment' && this._task) {
         const token = getMondayToken();
         if (!token) {
-          webviewView.webview.postMessage({ type: 'commentResult', ok: false, error: 'No Monday.com token configured' });
+          webviewView.webview.postMessage({ type: 'commentResult', ok: false, error: 'No Monday.com token configured', replyId: msg.updateId || null });
           return;
         }
         try {
-          const query = `mutation { create_update(item_id: ${this._task.id}, body: ${JSON.stringify(msg.text)}) { id } }`;
+          let query: string;
+          if (msg.updateId) {
+            // Reply to existing update
+            query = `mutation { create_update(item_id: ${this._task.id}, parent_id: ${msg.updateId}, body: ${JSON.stringify(msg.text)}) { id } }`;
+          } else {
+            // New top-level update
+            query = `mutation { create_update(item_id: ${this._task.id}, body: ${JSON.stringify(msg.text)}) { id } }`;
+          }
           const response = await axios.post(MONDAY_API_URL, { query }, {
             headers: { 'Authorization': token, 'Content-Type': 'application/json' },
           });
-          const updateId = response.data?.data?.create_update?.id;
-          if (updateId) {
-            webviewView.webview.postMessage({ type: 'commentResult', ok: true });
-            // Refresh to show the new comment
+          const resultId = response.data?.data?.create_update?.id;
+          if (resultId) {
+            webviewView.webview.postMessage({ type: 'commentResult', ok: true, replyId: msg.updateId || null });
             if (this._onCommentPosted) this._onCommentPosted();
           } else {
-            webviewView.webview.postMessage({ type: 'commentResult', ok: false, error: 'API returned no update ID' });
+            const errors = response.data?.errors;
+            const errMsg = errors?.[0]?.message || 'API returned no update ID';
+            webviewView.webview.postMessage({ type: 'commentResult', ok: false, error: errMsg, replyId: msg.updateId || null });
           }
         } catch (err: any) {
-          webviewView.webview.postMessage({ type: 'commentResult', ok: false, error: err.message || 'Unknown error' });
+          webviewView.webview.postMessage({ type: 'commentResult', ok: false, error: err.message || 'Unknown error', replyId: msg.updateId || null });
         }
       }
     });
@@ -876,6 +886,8 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
           repliesHtml = '<div class="replies">' + replyParts.join('') + '</div>';
         }
 
+        const updateId = u.id || '';
+
         // Avatar: use photo or colored initials
         let hash = 0;
         for (let c = 0; c < author.length; c++) hash = author.charCodeAt(c) + ((hash << 5) - hash);
@@ -885,6 +897,16 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
         const avatarHtml = photoUrl
           ? '<img class="avatar" src="' + photoUrl + '" />'
           : '<span class="avatar" style="background:' + avatarColor + '">' + initials + '</span>';
+
+        // Inline reply form (hidden by default)
+        const replyFormHtml = '<div class="inline-reply" id="rf' + i + '">' +
+          '<textarea class="reply-textarea" id="rt' + i + '" placeholder="Write a reply..."></textarea>' +
+          '<div class="reply-actions">' +
+            '<button class="rbtn rbtn-cancel" onclick="hideReply(' + i + ')">Cancel</button>' +
+            '<button class="rbtn rbtn-send" id="rs' + i + '" onclick="sendReply(' + i + ',\'' + updateId + '\')" disabled>Reply</button>' +
+          '</div>' +
+          '<div class="reply-status" id="rstat' + i + '"></div>' +
+          '</div>';
 
         updatesHtml.push(
           '<div class="update">' +
@@ -899,6 +921,8 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
           body +
           (assetsArr.length ? '<div class="assets">' + assetsArr.join('') + '</div>' : '') +
           repliesHtml +
+          '<button class="reply-btn" onclick="event.stopPropagation();showReply(' + i + ')">↩ Reply</button>' +
+          replyFormHtml +
           '</div></div>'
         );
       });
@@ -973,19 +997,22 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
       '.open-btn { display: block; text-align: center; margin: 18px 0 6px; padding: 10px; background: var(--monday-blue); color: #fff; border-radius: 8px; text-decoration: none; font-size: 13px; font-weight: 600; transition: opacity 0.15s; }',
       '.open-btn:hover { opacity: 0.85; text-decoration: none; }',
       '',
-      '.comment-box { margin: 18px 0 4px; }',
-      '.comment-box .section { margin-bottom: 8px; }',
-      '.comment-textarea { width: 100%; min-height: 60px; max-height: 150px; padding: 10px; border-radius: 8px; border: 1px solid var(--monday-border); background: var(--monday-card); color: var(--monday-text); font-family: inherit; font-size: 13px; line-height: 1.5; resize: vertical; outline: none; transition: border-color 0.2s; }',
-      '.comment-textarea:focus { border-color: var(--monday-blue); }',
-      '.comment-textarea::placeholder { color: var(--monday-text2); }',
-      '.comment-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }',
-      '.comment-btn { padding: 6px 16px; border-radius: 6px; border: none; font-size: 12px; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }',
-      '.comment-btn:hover { opacity: 0.85; }',
-      '.comment-btn-primary { background: var(--monday-blue); color: #fff; }',
-      '.comment-btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }',
-      '.comment-status { font-size: 11px; margin-top: 6px; text-align: center; }',
-      '.comment-status.ok { color: var(--monday-green); }',
-      '.comment-status.err { color: var(--monday-red); }',
+      '.reply-btn { display: inline-block; margin-top: 10px; padding: 4px 12px; border-radius: 14px; border: 1px solid var(--monday-border); background: transparent; color: var(--monday-text2); font-size: 11px; font-weight: 500; cursor: pointer; transition: all 0.15s; }',
+      '.reply-btn:hover { background: rgba(0,115,234,0.12); color: var(--monday-blue); border-color: var(--monday-blue); }',
+      '.inline-reply { display: none; margin-top: 10px; }',
+      '.inline-reply.show { display: block; }',
+      '.reply-textarea { width: 100%; min-height: 50px; max-height: 120px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--monday-border); background: rgba(0,0,0,0.15); color: var(--monday-text); font-family: inherit; font-size: 12px; line-height: 1.5; resize: vertical; outline: none; transition: border-color 0.2s; }',
+      '.reply-textarea:focus { border-color: var(--monday-blue); }',
+      '.reply-textarea::placeholder { color: var(--monday-text2); }',
+      '.reply-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }',
+      '.rbtn { padding: 4px 14px; border-radius: 6px; border: none; font-size: 11px; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }',
+      '.rbtn:hover { opacity: 0.85; }',
+      '.rbtn-cancel { background: transparent; color: var(--monday-text2); border: 1px solid var(--monday-border); }',
+      '.rbtn-send { background: var(--monday-blue); color: #fff; }',
+      '.rbtn-send:disabled { opacity: 0.4; cursor: not-allowed; }',
+      '.reply-status { font-size: 11px; margin-top: 4px; }',
+      '.reply-status.ok { color: var(--monday-green); }',
+      '.reply-status.err { color: var(--monday-red); }',
       '</style></head><body>',
       '<div class="task-title">' + esc(task.name) + ' <span class="task-id">#' + task.id + '</span></div>',
       '<div class="meta">' +
@@ -996,30 +1023,30 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
       '</div>',
       updatesHtml.length ? '<div class="section">\u{1F4AC} Updates <span class="count">(' + task.updates.length + ')</span></div>' + updatesHtml.join('\n') : '',
       subHtml.length ? '<div class="section">\u{1F4CB} Sub-Items <span class="count">(' + task.subitems.length + ')</span></div>' + subHtml.join('\n') : '',
-      '<div class="comment-box">' +
-        '<div class="section">\u270D\uFE0F Add Comment</div>' +
-        '<textarea class="comment-textarea" id="commentText" placeholder="Write an update..."></textarea>' +
-        '<div class="comment-actions">' +
-          '<button class="comment-btn comment-btn-primary" id="postBtn" onclick="postComment()" disabled>Post Update</button>' +
-        '</div>' +
-        '<div class="comment-status" id="commentStatus"></div>' +
-      '</div>',
       '<a class="open-btn" href="' + this._url + '">Open in Monday.com \u2197</a>',
       '<script>',
       'const vscode = acquireVsCodeApi();',
       'function tog(i){var e=document.getElementById("u"+i),a=document.getElementById("a"+i);if(e.style.display==="block"){e.style.display="none";a.classList.remove("open")}else{e.style.display="block";a.classList.add("open")}}',
-      'const ta=document.getElementById("commentText"), btn=document.getElementById("postBtn"), st=document.getElementById("commentStatus");',
-      'ta.addEventListener("input",function(){btn.disabled=!ta.value.trim();});',
-      'function postComment(){',
-      '  var text=ta.value.trim(); if(!text)return;',
-      '  btn.disabled=true; btn.textContent="Posting..."; st.textContent=""; st.className="comment-status";',
-      '  vscode.postMessage({type:"postComment",text:text});',
+      'function showReply(i){document.getElementById("rf"+i).classList.add("show");document.getElementById("rt"+i).focus();}',
+      'function hideReply(i){document.getElementById("rf"+i).classList.remove("show");document.getElementById("rt"+i).value="";document.getElementById("rs"+i).disabled=true;document.getElementById("rstat"+i).textContent="";}',
+      'document.addEventListener("input",function(e){if(e.target.classList.contains("reply-textarea")){var i=e.target.id.replace("rt","");document.getElementById("rs"+i).disabled=!e.target.value.trim();}});',
+      'function sendReply(i,updateId){',
+      '  var ta=document.getElementById("rt"+i),btn=document.getElementById("rs"+i),st=document.getElementById("rstat"+i);',
+      '  var text=ta.value.trim();if(!text)return;',
+      '  btn.disabled=true;btn.textContent="Sending...";st.textContent="";st.className="reply-status";',
+      '  vscode.postMessage({type:"postComment",text:text,updateId:updateId});',
       '}',
       'window.addEventListener("message",function(e){',
       '  var msg=e.data;',
       '  if(msg.type==="commentResult"){',
-      '    if(msg.ok){st.textContent="\\u2705 Comment posted!";st.className="comment-status ok";ta.value="";btn.textContent="Post Update";btn.disabled=true;}',
-      '    else{st.textContent="\\u274C "+msg.error;st.className="comment-status err";btn.textContent="Post Update";btn.disabled=false;}',
+      '    var forms=document.querySelectorAll(".inline-reply.show");',
+      '    forms.forEach(function(f){',
+      '      var i=f.id.replace("rf","");',
+      '      var st=document.getElementById("rstat"+i);',
+      '      var btn=document.getElementById("rs"+i);',
+      '      if(msg.ok){st.textContent="\\u2705 Reply posted!";st.className="reply-status ok";document.getElementById("rt"+i).value="";btn.textContent="Reply";btn.disabled=true;setTimeout(function(){hideReply(parseInt(i));},1500);}',
+      '      else{st.textContent="\\u274C "+msg.error;st.className="reply-status err";btn.textContent="Reply";btn.disabled=false;}',
+      '    });',
       '  }',
       '});',
       '</script>',
