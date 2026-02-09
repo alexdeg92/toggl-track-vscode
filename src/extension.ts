@@ -2517,6 +2517,48 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('toggl-track-auto.refreshMondaySidebar', async () => {
       await mondaySidebarController.forceRefresh();
     }),
+
+    vscode.commands.registerCommand('toggl-track-auto.remapBranchTask', async () => {
+      const branch = await getCurrentBranchName();
+      if (!branch) {
+        vscode.window.showErrorMessage('No git branch detected.');
+        return;
+      }
+
+      const input = await vscode.window.showInputBox({
+        title: 'Remap Branch to Monday Task',
+        prompt: `Enter the Monday.com task ID or full URL for branch "${branch}"`,
+        placeHolder: 'e.g. 11052039582 or https://pivot584586.monday.com/boards/.../pulses/11052039582',
+        ignoreFocusOut: true,
+      });
+
+      if (!input) return;
+
+      // Extract task ID from URL or use as-is
+      let taskId = input.trim();
+      const urlMatch = taskId.match(/pulses\/(\d+)/);
+      if (urlMatch) {
+        taskId = urlMatch[1];
+      }
+
+      if (!/^\d{6,}$/.test(taskId)) {
+        vscode.window.showErrorMessage('Invalid task ID. Must be a number (6+ digits) or a Monday.com URL.');
+        return;
+      }
+
+      // Save mapping
+      const mappings = readBranchTaskMappings();
+      mappings[branch] = { taskId };
+      writeBranchTaskMappings(mappings);
+
+      vscode.window.showInformationMessage(`Branch "${branch}" now mapped to Monday task ${taskId}`);
+
+      // Refresh sidebar to show new task
+      await mondaySidebarController.forceRefresh();
+      
+      // Refresh task context files
+      await vscode.commands.executeCommand('toggl-track-auto.refreshTaskContext');
+    }),
   );
 
   // Add tracker to subscriptions for proper disposal

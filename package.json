@@ -2,7 +2,7 @@
   "name": "toggl-track-auto",
   "displayName": "Toggl Track Auto",
   "description": "Automatically track time in Toggl based on your git branch and Monday.com tickets",
-  "version": "0.27.1",
+  "version": "0.28.0",
   "publisher": "pivot",
   "repository": {
     "type": "git",
@@ -55,6 +55,10 @@
       {
         "command": "toggl-track-auto.refreshMondaySidebar",
         "title": "Toggl: Refresh Monday Sidebar"
+      },
+      {
+        "command": "toggl-track-auto.remapBranchTask",
+        "title": "Toggl: Remap Branch to Monday Task"
       }
     ],
     "views": {
