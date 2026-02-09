@@ -728,6 +728,33 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.options = { enableScripts: true };
     this._updateWebview();
 
+    // Handle messages from webview
+    webviewView.webview.onDidReceiveMessage(async (msg) => {
+      if (msg.type === 'postComment' && this._task) {
+        const token = getMondayToken();
+        if (!token) {
+          webviewView.webview.postMessage({ type: 'commentResult', ok: false, error: 'No Monday.com token configured' });
+          return;
+        }
+        try {
+          const query = `mutation { create_update(item_id: ${this._task.id}, body: ${JSON.stringify(msg.text)}) { id } }`;
+          const response = await axios.post(MONDAY_API_URL, { query }, {
+            headers: { 'Authorization': token, 'Content-Type': 'application/json' },
+          });
+          const updateId = response.data?.data?.create_update?.id;
+          if (updateId) {
+            webviewView.webview.postMessage({ type: 'commentResult', ok: true });
+            // Refresh to show the new comment
+            if (this._onCommentPosted) this._onCommentPosted();
+          } else {
+            webviewView.webview.postMessage({ type: 'commentResult', ok: false, error: 'API returned no update ID' });
+          }
+        } catch (err: any) {
+          webviewView.webview.postMessage({ type: 'commentResult', ok: false, error: err.message || 'Unknown error' });
+        }
+      }
+    });
+
     // When panel becomes visible, trigger a refresh to load current task
     webviewView.onDidChangeVisibility(() => {
       if (webviewView.visible) {
@@ -745,7 +772,12 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
     this._onReady = callback;
   }
 
+  onCommentPosted(callback: () => void) {
+    this._onCommentPosted = callback;
+  }
+
   private _onReady?: () => void;
+  private _onCommentPosted?: () => void;
 
   setTask(task: MondayDetailedTask | null, url: string) {
     this._task = task;
@@ -940,6 +972,20 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
       'a:hover { text-decoration: underline; }',
       '.open-btn { display: block; text-align: center; margin: 18px 0 6px; padding: 10px; background: var(--monday-blue); color: #fff; border-radius: 8px; text-decoration: none; font-size: 13px; font-weight: 600; transition: opacity 0.15s; }',
       '.open-btn:hover { opacity: 0.85; text-decoration: none; }',
+      '',
+      '.comment-box { margin: 18px 0 4px; }',
+      '.comment-box .section { margin-bottom: 8px; }',
+      '.comment-textarea { width: 100%; min-height: 60px; max-height: 150px; padding: 10px; border-radius: 8px; border: 1px solid var(--monday-border); background: var(--monday-card); color: var(--monday-text); font-family: inherit; font-size: 13px; line-height: 1.5; resize: vertical; outline: none; transition: border-color 0.2s; }',
+      '.comment-textarea:focus { border-color: var(--monday-blue); }',
+      '.comment-textarea::placeholder { color: var(--monday-text2); }',
+      '.comment-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }',
+      '.comment-btn { padding: 6px 16px; border-radius: 6px; border: none; font-size: 12px; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }',
+      '.comment-btn:hover { opacity: 0.85; }',
+      '.comment-btn-primary { background: var(--monday-blue); color: #fff; }',
+      '.comment-btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }',
+      '.comment-status { font-size: 11px; margin-top: 6px; text-align: center; }',
+      '.comment-status.ok { color: var(--monday-green); }',
+      '.comment-status.err { color: var(--monday-red); }',
       '</style></head><body>',
       '<div class="task-title">' + esc(task.name) + ' <span class="task-id">#' + task.id + '</span></div>',
       '<div class="meta">' +
@@ -950,8 +996,33 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
       '</div>',
       updatesHtml.length ? '<div class="section">\u{1F4AC} Updates <span class="count">(' + task.updates.length + ')</span></div>' + updatesHtml.join('\n') : '',
       subHtml.length ? '<div class="section">\u{1F4CB} Sub-Items <span class="count">(' + task.subitems.length + ')</span></div>' + subHtml.join('\n') : '',
+      '<div class="comment-box">' +
+        '<div class="section">\u270D\uFE0F Add Comment</div>' +
+        '<textarea class="comment-textarea" id="commentText" placeholder="Write an update..."></textarea>' +
+        '<div class="comment-actions">' +
+          '<button class="comment-btn comment-btn-primary" id="postBtn" onclick="postComment()" disabled>Post Update</button>' +
+        '</div>' +
+        '<div class="comment-status" id="commentStatus"></div>' +
+      '</div>',
       '<a class="open-btn" href="' + this._url + '">Open in Monday.com \u2197</a>',
-      '<script>function tog(i){var e=document.getElementById("u"+i),a=document.getElementById("a"+i);if(e.style.display==="block"){e.style.display="none";a.classList.remove("open")}else{e.style.display="block";a.classList.add("open")}}</script>',
+      '<script>',
+      'const vscode = acquireVsCodeApi();',
+      'function tog(i){var e=document.getElementById("u"+i),a=document.getElementById("a"+i);if(e.style.display==="block"){e.style.display="none";a.classList.remove("open")}else{e.style.display="block";a.classList.add("open")}}',
+      'const ta=document.getElementById("commentText"), btn=document.getElementById("postBtn"), st=document.getElementById("commentStatus");',
+      'ta.addEventListener("input",function(){btn.disabled=!ta.value.trim();});',
+      'function postComment(){',
+      '  var text=ta.value.trim(); if(!text)return;',
+      '  btn.disabled=true; btn.textContent="Posting..."; st.textContent=""; st.className="comment-status";',
+      '  vscode.postMessage({type:"postComment",text:text});',
+      '}',
+      'window.addEventListener("message",function(e){',
+      '  var msg=e.data;',
+      '  if(msg.type==="commentResult"){',
+      '    if(msg.ok){st.textContent="\\u2705 Comment posted!";st.className="comment-status ok";ta.value="";btn.textContent="Post Update";btn.disabled=true;}',
+      '    else{st.textContent="\\u274C "+msg.error;st.className="comment-status err";btn.textContent="Post Update";btn.disabled=false;}',
+      '  }',
+      '});',
+      '</script>',
       '</body></html>'
     ].join('\n');
   }
@@ -2357,6 +2428,10 @@ export async function activate(context: vscode.ExtensionContext) {
   mondayWebviewProvider.onReady(() => {
     console.log('Monday webview ready, forcing refresh');
     mondaySidebarController.forceRefresh();
+  });
+  mondayWebviewProvider.onCommentPosted(() => {
+    // Refresh sidebar to show the new comment
+    setTimeout(() => mondaySidebarController.forceRefresh(), 1500);
   });
 
   // Also force initial sidebar update after a delay (ensures webview is ready)
