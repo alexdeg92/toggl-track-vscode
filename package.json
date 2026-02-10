@@ -3,7 +3,7 @@
   "displayName": "Toggl Track Auto",
   "description": "Automatically track time in Toggl based on your git branch and Monday.com tickets",
   "version": "0.28.1",
-  "publisher": "pivot",
+  "publisher": "pivotteam",
   "repository": {
     "type": "git",
     "url": "https://github.com/alexdeg92/toggl-track-vscode.git"
@@ -162,5 +162,6 @@
   },
   "dependencies": {
     "axios": "^1.6.0"
-  }
+  },
+  "icon": "icon.png"
 }
