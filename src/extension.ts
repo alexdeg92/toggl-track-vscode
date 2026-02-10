@@ -7,9 +7,13 @@ import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
-// Monday.com API token - must be set via MONDAY_TOKEN env var or settings
+// Monday.com API token - set via VS Code settings only
 function getMondayToken(): string {
-  return vscode.workspace.getConfiguration('togglTrackAuto').get<string>('mondayApiToken') || process.env.MONDAY_TOKEN || '';
+  return vscode.workspace.getConfiguration('togglTrackAuto').get<string>('mondayApiToken') || '';
+}
+
+function isMondayEnabled(): boolean {
+  return vscode.workspace.getConfiguration('togglTrackAuto').get<boolean>('mondayEnabled') || false;
 }
 
 // ========== Monday.com Task Integration ==========
@@ -1619,19 +1623,73 @@ async function runSetupWizard(): Promise<boolean> {
     return false;
   }
 
-  // Monday.com integration - users should set MONDAY_TOKEN env var or configure in settings
-  const mondayToken = getMondayToken();
-  if (mondayToken) {
-    await config.update('mondayApiToken', mondayToken, vscode.ConfigurationTarget.Global);
-    vscode.window.showInformationMessage('✅ Monday.com integration configured from environment!');
-  } else {
-    vscode.window.showWarningMessage('⚠️ Set MONDAY_TOKEN env var for Monday.com integration');
-  }
-
   vscode.window.showInformationMessage(
-    '🎉 Setup complete! Toggl will now auto-track based on your git branch.'
+    '🎉 Setup complete! Toggl will now auto-track based on your git branch. Run "Toggl: Setup Monday.com Integration" to enable Monday.com features.'
   );
 
+  return true;
+}
+
+async function runMondaySetupWizard(): Promise<boolean> {
+  const config = vscode.workspace.getConfiguration('togglTrackAuto');
+
+  const tokenInfo = await vscode.window.showInformationMessage(
+    '🔧 Monday.com Setup: You\'ll need your API token and board ID.',
+    'Continue',
+    'Cancel'
+  );
+
+  if (tokenInfo !== 'Continue') return false;
+
+  // Step 1: API Token
+  const mondayToken = await vscode.window.showInputBox({
+    prompt: 'Enter your Monday.com API token',
+    placeHolder: 'eyJhbGciOiJIUzI1NiJ9...',
+    password: true,
+    ignoreFocusOut: true,
+  });
+
+  if (!mondayToken) {
+    vscode.window.showWarningMessage('Monday.com setup cancelled.');
+    return false;
+  }
+
+  // Validate token
+  try {
+    const response = await axios.post('https://api.monday.com/v2', {
+      query: '{ me { id name } }',
+    }, {
+      headers: { 'Authorization': mondayToken, 'Content-Type': 'application/json' },
+    });
+    const me = response.data?.data?.me;
+    if (!me) throw new Error('Invalid response');
+    vscode.window.showInformationMessage(`✅ Connected to Monday.com as ${me.name}`);
+  } catch {
+    vscode.window.showErrorMessage('❌ Invalid Monday.com token. Please check and try again.');
+    return false;
+  }
+
+  // Step 2: Board ID
+  const currentBoardId = config.get<string>('mondayBoardId') || '4176868787';
+  const boardId = await vscode.window.showInputBox({
+    prompt: 'Enter your Monday.com board ID',
+    value: currentBoardId,
+    placeHolder: '4176868787',
+    ignoreFocusOut: true,
+    validateInput: (v) => /^\d+$/.test(v.trim()) ? null : 'Board ID must be a number',
+  });
+
+  if (!boardId) {
+    vscode.window.showWarningMessage('Monday.com setup cancelled.');
+    return false;
+  }
+
+  // Save settings
+  await config.update('mondayApiToken', mondayToken, vscode.ConfigurationTarget.Global);
+  await config.update('mondayBoardId', boardId.trim(), vscode.ConfigurationTarget.Global);
+  await config.update('mondayEnabled', true, vscode.ConfigurationTarget.Global);
+
+  vscode.window.showInformationMessage('🎉 Monday.com integration enabled and configured!');
   return true;
 }
 
@@ -1690,7 +1748,7 @@ class TogglTracker {
     this.statusBarItem.show();
     this.updateStatusBar('$(clock) Toggl: Initializing...');
     
-    // New branch button (between indicator and break)
+    // New branch button (between indicator and break) - only when Monday enabled
     this.newBranchStatusBarItem = vscode.window.createStatusBarItem(
       vscode.StatusBarAlignment.Left,
       99.5
@@ -1698,7 +1756,9 @@ class TogglTracker {
     this.newBranchStatusBarItem.command = 'toggl-track-auto.createBranchFromTask';
     this.newBranchStatusBarItem.text = '$(add)';
     this.newBranchStatusBarItem.tooltip = 'Create a new branch from a Monday.com task';
-    this.newBranchStatusBarItem.show();
+    if (isMondayEnabled()) {
+      this.newBranchStatusBarItem.show();
+    }
     
     // Break button
     this.breakStatusBarItem = vscode.window.createStatusBarItem(
@@ -1946,13 +2006,15 @@ class TogglTracker {
   }
 
   private async getMondayTaskName(ticketId: string): Promise<string | null> {
+    // Skip Monday API calls when integration is disabled
+    if (!isMondayEnabled()) return null;
+
     // Check cache first
     if (this.taskCache.has(ticketId)) {
       return this.taskCache.get(ticketId)!;
     }
 
-    const config = this.getConfig();
-    const mondayToken = config.get<string>('mondayApiToken') || getMondayToken();
+    const mondayToken = getMondayToken();
 
     try {
       const query = `
@@ -2450,35 +2512,45 @@ async function checkForUpdates(context: vscode.ExtensionContext) {
 export async function activate(context: vscode.ExtensionContext) {
   tracker = new TogglTracker();
 
-  // ========== Monday.com Sidebar TreeView ==========
-  const mondayTreeProvider = new MondayTaskTreeProvider();
-  const mondaySidebarController = new MondaySidebarController(mondayTreeProvider);
-  tracker.mondaySidebarController = mondaySidebarController;
+  // ========== Monday.com Sidebar (only when enabled) ==========
+  const mondayEnabled = isMondayEnabled();
+  let mondaySidebarController: MondaySidebarController | null = null;
 
-  // Rich webview sidebar
-  const mondayWebviewProvider = new MondayWebviewProvider(context.extensionUri);
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider('togglMondayWebview', mondayWebviewProvider)
-  );
-  mondaySidebarController.setWebviewProvider(mondayWebviewProvider);
-  mondayWebviewProvider.onReady(() => {
-    console.log('Monday webview ready, forcing refresh');
-    mondaySidebarController.forceRefresh();
-  });
-  mondayWebviewProvider.onCommentPosted(() => {
-    // Refresh sidebar to show the new comment
-    setTimeout(() => mondaySidebarController.forceRefresh(), 1500);
-  });
+  if (mondayEnabled) {
+    const mondayTreeProvider = new MondayTaskTreeProvider();
+    mondaySidebarController = new MondaySidebarController(mondayTreeProvider);
+    tracker.mondaySidebarController = mondaySidebarController;
 
-  // Also force initial sidebar update after a delay (ensures webview is ready)
-  setTimeout(() => mondaySidebarController.forceRefresh(), 3000);
-  setTimeout(() => mondaySidebarController.forceRefresh(), 8000);
+    const mondayWebviewProvider = new MondayWebviewProvider(context.extensionUri);
+    context.subscriptions.push(
+      vscode.window.registerWebviewViewProvider('togglMondayWebview', mondayWebviewProvider)
+    );
+    mondaySidebarController.setWebviewProvider(mondayWebviewProvider);
+    mondayWebviewProvider.onReady(() => {
+      mondaySidebarController!.forceRefresh();
+    });
+    mondayWebviewProvider.onCommentPosted(() => {
+      setTimeout(() => mondaySidebarController!.forceRefresh(), 1500);
+    });
 
-  // Set context for view visibility (will be controlled by org check in tracker.start())
-  vscode.commands.executeCommand('setContext', 'togglMondayTask.visible', true);
+    setTimeout(() => mondaySidebarController!.forceRefresh(), 3000);
+    setTimeout(() => mondaySidebarController!.forceRefresh(), 8000);
+  }
+
+  // Control sidebar visibility based on Monday enabled state
+  vscode.commands.executeCommand('setContext', 'togglMondayTask.visible', mondayEnabled);
   
   // Check for updates on startup (after 5 seconds to not slow down activation)
   setTimeout(() => checkForUpdates(context), 5000);
+
+  // Helper to guard Monday commands
+  const requireMonday = (fn: () => Promise<void>) => async () => {
+    if (!isMondayEnabled()) {
+      vscode.window.showWarningMessage('Monday.com integration is disabled. Enable it via "Toggl: Setup Monday.com Integration".');
+      return;
+    }
+    await fn();
+  };
 
   context.subscriptions.push(
     vscode.commands.registerCommand('toggl-track-auto.start', () => tracker.start()),
@@ -2491,18 +2563,25 @@ export async function activate(context: vscode.ExtensionContext) {
         tracker.start();
       }
     }),
-    // Monday.com integration commands
-    vscode.commands.registerCommand('toggl-track-auto.createBranchFromTask', () => createBranchFromTask()),
-    vscode.commands.registerCommand('toggl-track-auto.copyMondayTaskLink', () => copyMondayTaskLink()),
-    // Open update in editor
+    vscode.commands.registerCommand('toggl-track-auto.setupMonday', async () => {
+      const success = await runMondaySetupWizard();
+      if (success) {
+        vscode.window.showInformationMessage('Reload the window to activate Monday.com sidebar.', 'Reload Now').then(action => {
+          if (action === 'Reload Now') {
+            vscode.commands.executeCommand('workbench.action.reloadWindow');
+          }
+        });
+      }
+    }),
+    // Monday.com integration commands (guarded)
+    vscode.commands.registerCommand('toggl-track-auto.createBranchFromTask', requireMonday(() => createBranchFromTask())),
+    vscode.commands.registerCommand('toggl-track-auto.copyMondayTaskLink', requireMonday(() => copyMondayTaskLink())),
     vscode.commands.registerCommand('toggl-track-auto.openUpdate', async (text: string) => {
       const doc = await vscode.workspace.openTextDocument({ content: text, language: 'markdown' });
       await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
     }),
 
-    // New commands for v0.20.0
-    vscode.commands.registerCommand('toggl-track-auto.refreshTaskContext', async () => {
-      // Debug: show what we detect
+    vscode.commands.registerCommand('toggl-track-auto.refreshTaskContext', requireMonday(async () => {
       const root = getWorkspaceRoot();
       const branch = await getCurrentBranchName();
       const taskId = branch ? resolveTaskIdForBranch(branch) : null;
@@ -2511,7 +2590,7 @@ export async function activate(context: vscode.ExtensionContext) {
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Refreshing Monday.com task context...' },
         async () => {
-          await mondaySidebarController.forceRefresh();
+          if (mondaySidebarController) await mondaySidebarController.forceRefresh();
         }
       );
 
@@ -2522,12 +2601,12 @@ export async function activate(context: vscode.ExtensionContext) {
         `Monday Token: ${token ? 'SET (' + token.substring(0, 20) + '...)' : 'NOT SET'}`,
       ].join(' | ');
       vscode.window.showInformationMessage(`Monday refresh: ${debugInfo}`);
-    }),
-    vscode.commands.registerCommand('toggl-track-auto.refreshMondaySidebar', async () => {
-      await mondaySidebarController.forceRefresh();
-    }),
+    })),
+    vscode.commands.registerCommand('toggl-track-auto.refreshMondaySidebar', requireMonday(async () => {
+      if (mondaySidebarController) await mondaySidebarController.forceRefresh();
+    })),
 
-    vscode.commands.registerCommand('toggl-track-auto.remapBranchTask', async () => {
+    vscode.commands.registerCommand('toggl-track-auto.remapBranchTask', requireMonday(async () => {
       const branch = await getCurrentBranchName();
       if (!branch) {
         vscode.window.showErrorMessage('No git branch detected.');
@@ -2543,7 +2622,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
       if (!input) return;
 
-      // Extract task ID from URL or use as-is
       let taskId = input.trim();
       const urlMatch = taskId.match(/pulses\/(\d+)/);
       if (urlMatch) {
@@ -2555,22 +2633,17 @@ export async function activate(context: vscode.ExtensionContext) {
         return;
       }
 
-      // Save mapping
       const mappings = readBranchTaskMappings();
       mappings[branch] = { taskId };
       writeBranchTaskMappings(mappings);
 
       vscode.window.showInformationMessage(`Branch "${branch}" now mapped to Monday task ${taskId}`);
 
-      // Refresh sidebar to show new task
-      await mondaySidebarController.forceRefresh();
-      
-      // Refresh task context files
+      if (mondaySidebarController) await mondaySidebarController.forceRefresh();
       await vscode.commands.executeCommand('toggl-track-auto.refreshTaskContext');
-    }),
+    })),
   );
 
-  // Add tracker to subscriptions for proper disposal
   context.subscriptions.push(tracker);
 
   // Check if setup is needed
@@ -2581,16 +2654,16 @@ export async function activate(context: vscode.ExtensionContext) {
       tracker.start();
     }
   } else {
-    // Auto-start if already configured
     tracker.start();
   }
 
-  // On startup, check if current branch has a Monday task and update hook + sidebar
-  setTimeout(async () => {
-    checkBranchForMondayLink();
-    // Initial sidebar update
-    mondaySidebarController.update();
-  }, 3000);
+  // On startup, check Monday hooks and sidebar only if enabled
+  if (mondayEnabled) {
+    setTimeout(async () => {
+      checkBranchForMondayLink();
+      if (mondaySidebarController) mondaySidebarController.update();
+    }, 3000);
+  }
 }
 
 export function deactivate() {

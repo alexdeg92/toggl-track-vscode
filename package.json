@@ -2,7 +2,7 @@
   "name": "toggl-track-auto",
   "displayName": "Toggl Track Auto",
   "description": "Automatically track time in Toggl based on your git branch and Monday.com tickets",
-  "version": "0.28.1",
+  "version": "0.29.0",
   "publisher": "pivotteam",
   "repository": {
     "type": "git",
@@ -39,6 +39,10 @@
       {
         "command": "toggl-track-auto.toggleBreak",
         "title": "Toggl: Start/End Break"
+      },
+      {
+        "command": "toggl-track-auto.setupMonday",
+        "title": "Toggl: Setup Monday.com Integration"
       },
       {
         "command": "toggl-track-auto.createBranchFromTask",
@@ -89,10 +93,15 @@
           "default": 0,
           "description": "Your Toggl workspace ID"
         },
+        "togglTrackAuto.mondayEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable Monday.com integration (sidebar, task linking, context files)"
+        },
         "togglTrackAuto.mondayApiToken": {
           "type": "string",
           "default": "",
-          "description": "Your Monday.com API token (also reads from MONDAY_TOKEN env var if not set)"
+          "description": "Your Monday.com API token"
         },
         "togglTrackAuto.mondayBoardId": {
           "type": "string",
