@@ -13,7 +13,7 @@ function getMondayToken(): string {
 }
 
 function isMondayEnabled(): boolean {
-  return vscode.workspace.getConfiguration('togglTrackAuto').get<boolean>('mondayEnabled') || false;
+  return vscode.workspace.getConfiguration('togglTrackAuto').get<boolean>('mondayEnabled') ?? true;
 }
 
 // ========== Monday.com Task Integration ==========
