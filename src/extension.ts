@@ -2456,8 +2456,19 @@ const GITHUB_REPO = 'alexdeg92/toggl-track-vscode';
 
 async function checkForUpdates(context: vscode.ExtensionContext) {
   try {
+    // Skip if we already installed an update this session (waiting for reload)
+    const alreadyUpdated = context.globalState.get<string>('lastInstalledVersion');
     const extension = vscode.extensions.getExtension('pivot.toggl-track-auto');
     const currentVersion = extension?.packageJSON?.version || '0.0.0';
+    
+    // Clear the flag if the installed version matches (user reloaded)
+    if (alreadyUpdated && alreadyUpdated === currentVersion) {
+      await context.globalState.update('lastInstalledVersion', undefined);
+    }
+    // Skip update check if we already installed but haven't reloaded yet
+    if (alreadyUpdated && alreadyUpdated !== currentVersion) {
+      return;
+    }
     
     const response = await axios.get(
       `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
@@ -2493,6 +2504,9 @@ async function checkForUpdates(context: vscode.ExtensionContext) {
           'workbench.extensions.installExtension',
           vscode.Uri.file(downloadPath)
         );
+        
+        // Remember that we installed this version (suppress re-notification until reload)
+        await context.globalState.update('lastInstalledVersion', latestVersion);
         
         const reload = await vscode.window.showInformationMessage(
           `Toggl Track Auto v${latestVersion} installed! Reload to activate.`,
