@@ -16,6 +16,218 @@ function isMondayEnabled(): boolean {
   return vscode.workspace.getConfiguration('togglTrackAuto').get<boolean>('mondayEnabled') ?? true;
 }
 
+
+// ========== Jira Integration ==========
+function isJiraEnabled(): boolean {
+  return vscode.workspace.getConfiguration('togglTrackAuto').get<boolean>('jiraEnabled') ?? false;
+}
+function getJiraBaseUrl(): string {
+  return (vscode.workspace.getConfiguration('togglTrackAuto').get<string>('jiraBaseUrl') || '').replace(/\/$/, '');
+}
+function getJiraEmail(): string {
+  return vscode.workspace.getConfiguration('togglTrackAuto').get<string>('jiraEmail') || '';
+}
+function getJiraApiToken(): string {
+  return vscode.workspace.getConfiguration('togglTrackAuto').get<string>('jiraApiToken') || '';
+}
+function getJiraProjectKey(): string {
+  return vscode.workspace.getConfiguration('togglTrackAuto').get<string>('jiraProjectKey') || 'PIVOT';
+}
+function getJiraAuthHeader(): string {
+  return 'Basic ' + Buffer.from(getJiraEmail() + ':' + getJiraApiToken()).toString('base64');
+}
+function getJiraIssueUrl(issueKey: string): string {
+  return getJiraBaseUrl() + '/browse/' + issueKey;
+}
+function isJiraKey(id: string): boolean {
+  return /^[A-Z]{2,}-\d+$/.test(id);
+}
+
+// Jira Types
+interface JiraIssue {
+  key: string;
+  fields: {
+    summary: string;
+    status: { name: string };
+    priority?: { name: string };
+    assignee?: { displayName: string };
+    issuetype: { name: string };
+    parent?: { key: string; fields: { summary: string } };
+    description?: any;
+    comment?: { comments: JiraComment[] };
+    subtasks?: JiraSubtask[];
+  };
+}
+interface JiraComment {
+  id: string;
+  author: { displayName: string };
+  created: string;
+  body: any;
+}
+interface JiraSubtask {
+  key: string;
+  fields: { summary: string; status: { name: string }; issuetype: { name: string } };
+}
+interface JiraBranchTaskMapping {
+  [branch: string]: {
+    issueKey: string;
+    summary: string;
+    url: string;
+  };
+}
+
+// ADF text extractor
+function extractAdfText(adf: any): string {
+  if (!adf) return '';
+  if (typeof adf === 'string') return adf;
+  const texts: string[] = [];
+  function walk(node: any) {
+    if (!node) return;
+    if (node.type === 'text' && node.text) texts.push(node.text);
+    if (Array.isArray(node.content)) node.content.forEach(walk);
+  }
+  walk(adf);
+  return texts.join(' ');
+}
+
+// Jira file helpers
+function getJiraTasksFilePath(): string | null {
+  const root = getWorkspaceRoot();
+  if (!root) return null;
+  return path.join(root, '.vscode', 'jira-tasks.json');
+}
+function readJiraBranchMappings(): JiraBranchTaskMapping {
+  const filePath = getJiraTasksFilePath();
+  if (!filePath) return {};
+  try {
+    if (fs.existsSync(filePath)) return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {}
+  return {};
+}
+function writeJiraBranchMappings(mappings: JiraBranchTaskMapping): void {
+  const filePath = getJiraTasksFilePath();
+  if (!filePath) return;
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(mappings, null, 2));
+  const root = getWorkspaceRoot();
+  if (root) ensureGitignoreEntry(root, '.vscode/jira-tasks.json');
+}
+
+// Jira API functions
+async function fetchJiraIssue(issueKey: string): Promise<JiraIssue | null> {
+  const baseUrl = getJiraBaseUrl();
+  if (!baseUrl || !getJiraEmail() || !getJiraApiToken()) return null;
+  try {
+    const response = await axios.get(
+      `${baseUrl}/rest/api/3/issue/${issueKey}?fields=summary,status,priority,assignee,issuetype,parent,description,comment,subtasks`,
+      { headers: { 'Authorization': getJiraAuthHeader(), 'Accept': 'application/json' } }
+    );
+    return response.data as JiraIssue;
+  } catch (error) {
+    console.error('Failed to fetch Jira issue:', error);
+    return null;
+  }
+}
+
+async function fetchJiraIssues(): Promise<JiraIssue[]> {
+  const baseUrl = getJiraBaseUrl();
+  if (!baseUrl || !getJiraEmail() || !getJiraApiToken()) return [];
+  try {
+    const jql = `project=${getJiraProjectKey()} AND assignee=currentUser() AND statusCategory != Done ORDER BY updated DESC`;
+    const response = await axios.get(
+      `${baseUrl}/rest/api/3/search?jql=${encodeURIComponent(jql)}&maxResults=50&fields=summary,status,priority,assignee,issuetype`,
+      { headers: { 'Authorization': getJiraAuthHeader(), 'Accept': 'application/json' } }
+    );
+    return (response.data?.issues || []) as JiraIssue[];
+  } catch (error) {
+    console.error('Failed to fetch Jira issues:', error);
+    return [];
+  }
+}
+
+async function postJiraComment(issueKey: string, text: string): Promise<boolean> {
+  const baseUrl = getJiraBaseUrl();
+  if (!baseUrl || !getJiraEmail() || !getJiraApiToken()) return false;
+  try {
+    await axios.post(
+      `${baseUrl}/rest/api/3/issue/${issueKey}/comment`,
+      { body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] } },
+      { headers: { 'Authorization': getJiraAuthHeader(), 'Content-Type': 'application/json', 'Accept': 'application/json' } }
+    );
+    return true;
+  } catch (error) {
+    console.error('Failed to post Jira comment:', error);
+    return false;
+  }
+}
+
+// Jira context files
+function generateJiraTaskMarkdown(issue: JiraIssue, url: string): string {
+  const f = issue.fields;
+  let md = `# Issue: ${issue.key} — ${f.summary}\n\n`;
+  md += `**Key:** ${issue.key}\n`;
+  md += `**Status:** ${f.status.name}\n`;
+  if (f.priority) md += `**Priority:** ${f.priority.name}\n`;
+  if (f.assignee) md += `**Assignee:** ${f.assignee.displayName}\n`;
+  if (f.parent) md += `**Parent:** ${f.parent.key} — ${f.parent.fields.summary}\n`;
+  md += `**Type:** ${f.issuetype.name}\n`;
+  md += `**Jira URL:** ${url}\n`;
+  const desc = extractAdfText(f.description);
+  if (desc) md += `\n## Description\n\n${desc}\n`;
+  if (f.comment?.comments?.length) {
+    md += `\n## Comments\n`;
+    for (const c of f.comment.comments) {
+      const date = new Date(c.created).toLocaleDateString();
+      md += `\n### ${c.author.displayName} — ${date}\n\n${extractAdfText(c.body)}\n`;
+    }
+  }
+  if (f.subtasks?.length) {
+    md += `\n## Subtasks\n\n`;
+    for (const s of f.subtasks) {
+      const done = s.fields.status.name.toLowerCase().includes('done');
+      md += `- [${done ? 'x' : ' '}] ${s.key}: ${s.fields.summary} (${s.fields.status.name})\n`;
+    }
+  }
+  return md;
+}
+
+function generateJiraContextMarkdown(issue: JiraIssue, url: string): string {
+  const f = issue.fields;
+  const desc = extractAdfText(f.description) || 'No description available.';
+  let md = `# Jira Issue Context\n\nYou are working on: ${issue.key} — ${f.summary}\nJira URL: ${url}\n`;
+  md += `\n## What needs to be done\n\n${desc}\n`;
+  if (f.subtasks?.length) {
+    md += `\n## Sub-tasks\n\n`;
+    for (const s of f.subtasks) {
+      const done = s.fields.status.name.toLowerCase().includes('done');
+      md += `- [${done ? 'x' : ' '}] ${s.key}: ${s.fields.summary}\n`;
+    }
+  }
+  return md;
+}
+
+async function writeJiraContextFiles(issue: JiraIssue, url: string): Promise<void> {
+  const root = getWorkspaceRoot();
+  if (!root) return;
+  const jiraDir = path.join(root, 'jira');
+  if (!fs.existsSync(jiraDir)) fs.mkdirSync(jiraDir, { recursive: true });
+  fs.writeFileSync(path.join(jiraDir, 'TASK.md'), generateJiraTaskMarkdown(issue, url), 'utf-8');
+  fs.writeFileSync(path.join(jiraDir, 'CONTEXT.md'), generateJiraContextMarkdown(issue, url), 'utf-8');
+  ensureGitignoreEntry(root, 'jira/');
+}
+
+function clearJiraContextFiles(): void {
+  const root = getWorkspaceRoot();
+  if (!root) return;
+  const jiraDir = path.join(root, 'jira');
+  if (fs.existsSync(jiraDir)) {
+    ['TASK.md', 'CONTEXT.md'].forEach(f => {
+      const fp = path.join(jiraDir, f);
+      if (fs.existsSync(fp)) fs.unlinkSync(fp);
+    });
+  }
+}
 // ========== Monday.com Task Integration ==========
 
 const MONDAY_API_URL = 'https://api.monday.com/v2';
@@ -1068,6 +1280,228 @@ class MondayWebviewProvider implements vscode.WebviewViewProvider {
   }
 }
 
+// ========== Jira Webview Provider ==========
+
+class JiraWebviewProvider implements vscode.WebviewViewProvider {
+  public static readonly viewType = 'togglJiraWebview';
+  private view?: vscode.WebviewView;
+  private currentIssue: JiraIssue | null = null;
+  private currentUrl: string = '';
+
+  constructor(private readonly extensionUri: vscode.Uri) {}
+
+  public resolveWebviewView(
+    webviewView: vscode.WebviewView,
+    context: vscode.WebviewViewResolveContext,
+    token: vscode.CancellationToken,
+  ): void {
+    this.view = webviewView;
+
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [this.extensionUri],
+    };
+
+    webviewView.webview.html = this.getHtmlForWebview(webviewView.webview);
+  }
+
+  public setIssue(issue: JiraIssue, url: string): void {
+    this.currentIssue = issue;
+    this.currentUrl = url;
+    if (this.view) {
+      this.view.webview.html = this.getHtmlForWebview(this.view.webview);
+    }
+  }
+
+  public setNoIssue(): void {
+    this.currentIssue = null;
+    this.currentUrl = '';
+    if (this.view) {
+      this.view.webview.html = this.getHtmlForWebview(this.view.webview);
+    }
+  }
+
+  private getHtmlForWebview(webview: vscode.Webview): string {
+    if (!this.currentIssue) {
+      return `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8" />
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 16px; color: #ccc; background: #1e1e1e; }
+            .no-issue { text-align: center; padding: 20px; }
+            .no-issue p { margin: 0 0 16px 0; }
+            button { background: #0078d4; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+            button:hover { background: #106ebe; }
+          </style>
+        </head>
+        <body>
+          <div class="no-issue">
+            <p>No Jira issue linked to the current branch.</p>
+            <button onclick="vscode.postMessage({command: 'linkIssue'})">Link Jira Issue</button>
+          </div>
+        </body>
+        </html>
+      `;
+    }
+
+    const issue = this.currentIssue;
+    const f = issue.fields;
+    const statusLower = f.status.name.toLowerCase();
+    const statusColor = statusLower.includes('done') ? '#28a745' 
+      : statusLower.includes('progress') ? '#0078d4'
+      : statusLower.includes('review') ? '#6f42c1'
+      : statusLower.includes('stuck') || statusLower.includes('blocked') ? '#dc3545'
+      : '#ffc107';
+
+    const priorityColor = f.priority ? (
+      f.priority.name.toLowerCase().includes('critical') ? '#dc3545' :
+      f.priority.name.toLowerCase().includes('high') ? '#fd7e14' :
+      f.priority.name.toLowerCase().includes('medium') ? '#ffc107' :
+      '#28a745'
+    ) : '#999';
+
+    let subtasksHtml = '';
+    if (f.subtasks && f.subtasks.length > 0) {
+      subtasksHtml = '<div class="subtasks"><h4>Subtasks</h4>' + f.subtasks.map(s => {
+        const done = s.fields.status.name.toLowerCase().includes('done');
+        return `<div class="subtask"><input type="checkbox" ${done ? 'checked' : ''} disabled /> ${s.key}: ${s.fields.summary}</div>`;
+      }).join('') + '</div>';
+    }
+
+    let commentsHtml = '';
+    if (f.comment && f.comment.comments && f.comment.comments.length > 0) {
+      commentsHtml = '<div class="comments"><h4>Comments</h4>' + f.comment.comments.map(c => {
+        const date = new Date(c.created).toLocaleDateString();
+        const body = extractAdfText(c.body);
+        return `<div class="comment"><div class="comment-author">${c.author.displayName} — ${date}</div><div class="comment-body">${body}</div></div>`;
+      }).join('') + '</div>';
+    }
+
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8" />
+        <style>
+          :root {
+            --vscode-foreground: #ccc;
+            --vscode-editor-background: #1e1e1e;
+            --vscode-editor-lineNumberForeground: #858585;
+            --vscode-input-background: #3c3c3c;
+            --vscode-input-border: #555;
+            --vscode-input-foreground: #ccc;
+            --vscode-button-background: #0078d4;
+            --vscode-button-foreground: white;
+            --vscode-button-hoverBackground: #106ebe;
+          }
+          * { box-sizing: border-box; }
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 12px; color: var(--vscode-foreground); background: var(--vscode-editor-background); font-size: 12px; line-height: 1.5; }
+          h3 { margin: 0 0 8px 0; font-size: 16px; }
+          h4 { margin: 12px 0 8px 0; font-size: 13px; }
+          .header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px; }
+          .title { flex: 1; }
+          .key { color: #888; font-size: 12px; }
+          .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+          .badge { display: inline-flex; align-items: center; background: #333; padding: 4px 8px; border-radius: 3px; font-size: 11px; border-left: 3px solid; }
+          .badge.status { border-left-color: ${statusColor}; }
+          .badge.priority { border-left-color: ${priorityColor}; }
+          .badge.type { border-left-color: #6f42c1; }
+          .badge.assignee { border-left-color: #17a2b8; }
+          .button-group { display: flex; gap: 6px; margin-bottom: 12px; }
+          button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 6px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; }
+          button:hover { background: var(--vscode-button-hoverBackground); }
+          .description, .comments, .subtasks { margin-top: 12px; padding-top: 12px; border-top: 1px solid #444; }
+          .subtask { margin: 4px 0; padding-left: 20px; }
+          .subtask input { margin-right: 6px; }
+          .comment { margin-bottom: 12px; padding: 8px; background: #2d2d2d; border-radius: 3px; }
+          .comment-author { font-weight: bold; font-size: 11px; color: #888; margin-bottom: 4px; }
+          .comment-body { font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="title">
+            <h3>${issue.key} — ${f.summary}</h3>
+            <div class="key">Jira ID: ${issue.key}</div>
+          </div>
+        </div>
+        <div class="badges">
+          <div class="badge status">Status: ${f.status.name}</div>
+          ${f.priority ? `<div class="badge priority">Priority: ${f.priority.name}</div>` : ''}
+          ${f.assignee ? `<div class="badge assignee">Assigned: ${f.assignee.displayName}</div>` : ''}
+          <div class="badge type">Type: ${f.issuetype.name}</div>
+          ${f.parent ? `<div class="badge">Parent: ${f.parent.key}</div>` : ''}
+        </div>
+        <div class="button-group">
+          <button onclick="window.open('${this.currentUrl}', '_blank')">Open in Jira</button>
+          <button onclick="vscode.postMessage({command: 'remap'})">Remap Branch</button>
+        </div>
+        ${f.description ? `<div class="description"><h4>Description</h4><div>${extractAdfText(f.description)}</div></div>` : ''}
+        ${subtasksHtml}
+        ${commentsHtml}
+      </body>
+      </html>
+    `;
+  }
+}
+
+// ========== Jira Sidebar Controller ==========
+
+class JiraSidebarController {
+  private webviewProvider: JiraWebviewProvider | null = null;
+  private lastBranch: string = '';
+  private lastIssueKey: string = '';
+
+  setWebviewProvider(provider: JiraWebviewProvider) {
+    this.webviewProvider = provider;
+  }
+
+  async update(): Promise<void> {
+    const branch = await getCurrentBranchName();
+    if (!branch) {
+      this.webviewProvider?.setNoIssue();
+      clearJiraContextFiles();
+      this.lastBranch = '';
+      this.lastIssueKey = '';
+      return;
+    }
+    const mappings = readJiraBranchMappings();
+    let issueKey = mappings[branch]?.issueKey || null;
+    if (!issueKey) {
+      const match = branch.match(/([A-Z]{2,}-\d+)/);
+      issueKey = match ? match[1] : null;
+    }
+    if (!issueKey) {
+      this.webviewProvider?.setNoIssue();
+      clearJiraContextFiles();
+      this.lastBranch = branch;
+      this.lastIssueKey = '';
+      return;
+    }
+    if (branch === this.lastBranch && issueKey === this.lastIssueKey) return;
+    this.lastBranch = branch;
+    this.lastIssueKey = issueKey;
+    const issue = await fetchJiraIssue(issueKey);
+    const url = getJiraIssueUrl(issueKey);
+    if (issue) {
+      this.webviewProvider?.setIssue(issue, url);
+      await writeJiraContextFiles(issue, url);
+    } else {
+      this.webviewProvider?.setNoIssue();
+      clearJiraContextFiles();
+    }
+  }
+
+  async forceRefresh(): Promise<void> {
+    this.lastBranch = '';
+    this.lastIssueKey = '';
+    await this.update();
+  }
+}
+
+
 class MondaySidebarController {
   private treeProvider: MondayTaskTreeProvider;
   private webviewProvider: MondayWebviewProvider | null = null;
@@ -1732,6 +2166,7 @@ class TogglTracker {
   private lastCheckedOrgFolder: string = '';
   // Monday sidebar controller (set externally)
   public mondaySidebarController: MondaySidebarController | null = null;
+  public jiraSidebarController: JiraSidebarController | null = null;
 
   constructor() {
     this.statusBarItem = vscode.window.createStatusBarItem(
@@ -1952,6 +2387,9 @@ class TogglTracker {
         if (this.mondaySidebarController) {
           this.mondaySidebarController.update();
         }
+    if (this.jiraSidebarController) {
+      this.jiraSidebarController.update();
+    }
       }
     });
   }
@@ -2523,6 +2961,108 @@ async function checkForUpdates(context: vscode.ExtensionContext) {
   }
 }
 
+
+// ========== Jira Commands ==========
+
+async function createBranchFromJiraIssue(): Promise<void> {
+  const root = getWorkspaceRoot();
+  if (!root) { vscode.window.showErrorMessage('No workspace folder open.'); return; }
+
+  // If both Monday and Jira are enabled, ask which to use
+  if (isMondayEnabled() && isJiraEnabled()) {
+    const pick = await vscode.window.showQuickPick(['Monday.com', 'Jira'], { placeHolder: 'Which system?' });
+    if (!pick) return;
+    if (pick === 'Jira') { await createBranchFromJiraIssue(); return; }
+  } else if (!isMondayEnabled() && isJiraEnabled()) {
+    await createBranchFromJiraIssue();
+    return;
+  }
+  if (!isJiraEnabled()) { vscode.window.showWarningMessage('Jira integration is not enabled.'); return; }
+
+  const issues = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: 'Fetching Jira issues...' },
+    () => fetchJiraIssues()
+  );
+  if (issues.length === 0) { vscode.window.showInformationMessage('No Jira issues found.'); return; }
+
+  const items = issues.map(issue => ({
+    label: issue.key + ': ' + issue.fields.summary,
+    description: [issue.fields.status.name, issue.fields.priority?.name].filter(Boolean).join('  ·  '),
+    detail: issue.fields.assignee ? '👤 ' + issue.fields.assignee.displayName : undefined,
+    issue,
+  }));
+
+  const selected = await vscode.window.showQuickPick(items, {
+    placeHolder: 'Select a Jira issue to create a branch for',
+    matchOnDescription: true,
+  });
+  if (!selected) return;
+
+  const issue = selected.issue;
+  const suggestedBranch = `feat/${issue.key}-${slugify(issue.fields.summary)}`;
+  const branchName = await vscode.window.showInputBox({
+    prompt: 'Branch name (edit if needed)',
+    value: suggestedBranch,
+    validateInput: (v) => !v.trim() ? 'Cannot be empty' : /\s/.test(v) ? 'No spaces allowed' : null,
+  });
+  if (!branchName) return;
+
+  try {
+    await execAsync(`git checkout -b "${branchName}"`, { cwd: root });
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`Failed to create branch: ${error.message}`);
+    return;
+  }
+
+  const mappings = readJiraBranchMappings();
+  mappings[branchName] = { issueKey: issue.key, summary: issue.fields.summary, url: getJiraIssueUrl(issue.key) };
+  writeJiraBranchMappings(mappings);
+
+  await vscode.window.showInformationMessage(`✅ Branch "${branchName}" created for ${issue.key}.`, 'Open in Jira').then(action => {
+    if (action === 'Open in Jira') vscode.env.openExternal(vscode.Uri.parse(getJiraIssueUrl(issue.key)));
+  });
+}
+
+async function runJiraSetupWizard(): Promise<boolean> {
+  const config = vscode.workspace.getConfiguration('togglTrackAuto');
+  const cont = await vscode.window.showInformationMessage('🔧 Jira Setup: You will need your Atlassian email and API token (from id.atlassian.com/manage-profile/security/api-tokens).', 'Continue', 'Cancel');
+  if (cont !== 'Continue') return false;
+
+  const baseUrl = await vscode.window.showInputBox({
+    prompt: 'Jira base URL', placeHolder: 'https://company.atlassian.net', ignoreFocusOut: true,
+    validateInput: v => v.startsWith('https://') ? null : 'Must start with https://',
+  });
+  if (!baseUrl) return false;
+
+  const email = await vscode.window.showInputBox({ prompt: 'Atlassian account email', ignoreFocusOut: true });
+  if (!email) return false;
+
+  const token = await vscode.window.showInputBox({ prompt: 'Jira API token', password: true, ignoreFocusOut: true });
+  if (!token) return false;
+
+  try {
+    const encoded = Buffer.from(email + ':' + token).toString('base64');
+    const resp = await axios.get(baseUrl.replace(/\/$/, '') + '/rest/api/3/myself', {
+      headers: { 'Authorization': 'Basic ' + encoded, 'Accept': 'application/json' }
+    });
+    vscode.window.showInformationMessage(`✅ Connected to Jira as ${resp.data.displayName}`);
+  } catch {
+    vscode.window.showErrorMessage('❌ Could not authenticate with Jira. Check email and token.');
+    return false;
+  }
+
+  const projectKey = await vscode.window.showInputBox({ prompt: 'Jira project key', value: 'PIVOT', ignoreFocusOut: true });
+  if (!projectKey) return false;
+
+  await config.update('jiraBaseUrl', baseUrl.replace(/\/$/, ''), vscode.ConfigurationTarget.Global);
+  await config.update('jiraEmail', email, vscode.ConfigurationTarget.Global);
+  await config.update('jiraApiToken', token, vscode.ConfigurationTarget.Global);
+  await config.update('jiraProjectKey', projectKey.toUpperCase(), vscode.ConfigurationTarget.Global);
+  await config.update('jiraEnabled', true, vscode.ConfigurationTarget.Global);
+  vscode.window.showInformationMessage('🎉 Jira integration enabled!');
+  return true;
+}
+
 export async function activate(context: vscode.ExtensionContext) {
   tracker = new TogglTracker();
 
@@ -2549,6 +3089,20 @@ export async function activate(context: vscode.ExtensionContext) {
 
     setTimeout(() => mondaySidebarController!.forceRefresh(), 3000);
     setTimeout(() => mondaySidebarController!.forceRefresh(), 8000);
+
+  // ========== Jira Sidebar (only when enabled) ==========
+  const jiraEnabled = isJiraEnabled();
+  let jiraSidebarController: JiraSidebarController | null = null;
+
+  if (jiraEnabled) {
+    jiraSidebarController = new JiraSidebarController();
+    const jiraWebviewProvider = new JiraWebviewProvider(context.extensionUri);
+    context.subscriptions.push(
+      vscode.window.registerWebviewViewProvider('togglJiraWebview', jiraWebviewProvider)
+    );
+    jiraSidebarController.setWebviewProvider(jiraWebviewProvider);
+    setTimeout(() => jiraSidebarController!.forceRefresh(), 3000);
+  }
   }
 
   // Control sidebar visibility based on Monday enabled state
@@ -2656,6 +3210,69 @@ export async function activate(context: vscode.ExtensionContext) {
       if (mondaySidebarController) await mondaySidebarController.forceRefresh();
       await vscode.commands.executeCommand('toggl-track-auto.refreshTaskContext');
     })),
+    // Jira commands
+    vscode.commands.registerCommand('toggl-track-auto.setupJira', async () => {
+      const success = await runJiraSetupWizard();
+      if (success) {
+        vscode.window.showInformationMessage('Reload the window to activate Jira sidebar.', 'Reload Now').then(action => {
+          if (action === 'Reload Now') {
+            vscode.commands.executeCommand('workbench.action.reloadWindow');
+          }
+        });
+      }
+    }),
+    vscode.commands.registerCommand('toggl-track-auto.createBranchFromJiraIssue', async () => {
+      if (isMondayEnabled() && isJiraEnabled()) {
+        const pick = await vscode.window.showQuickPick(['Monday.com', 'Jira'], { placeHolder: 'Which system?' });
+        if (!pick) return;
+        if (pick === 'Jira') { await createBranchFromJiraIssue(); return; }
+        await createBranchFromTask();
+      } else if (!isMondayEnabled() && isJiraEnabled()) {
+        await createBranchFromJiraIssue();
+      } else if (isMondayEnabled()) {
+        await createBranchFromTask();
+      }
+    }),
+    vscode.commands.registerCommand('toggl-track-auto.copyJiraIssueLink', async () => {
+      const branch = await getCurrentBranchName();
+      if (!branch) return;
+      const mappings = readJiraBranchMappings();
+      const mapping = mappings[branch];
+      if (mapping) {
+        await vscode.env.clipboard.writeText(mapping.url);
+        vscode.window.showInformationMessage('📋 Jira issue link copied: ' + mapping.url);
+        return;
+      }
+      const match = branch.match(/([A-Z]{2,}-\d+)/);
+      if (match) {
+        const url = getJiraIssueUrl(match[1]);
+        await vscode.env.clipboard.writeText(url);
+        vscode.window.showInformationMessage('📋 Jira issue link copied (from branch): ' + url);
+      } else {
+        vscode.window.showWarningMessage('No Jira issue associated with this branch.');
+      }
+    }),
+    vscode.commands.registerCommand('toggl-track-auto.refreshJiraSidebar', async () => {
+      if (jiraSidebarController) await jiraSidebarController.forceRefresh();
+    }),
+    vscode.commands.registerCommand('toggl-track-auto.remapBranchJiraIssue', async () => {
+      const branch = await getCurrentBranchName();
+      if (!branch) return;
+      const input = await vscode.window.showInputBox({
+        title: 'Remap Branch to Jira Issue',
+        prompt: `Enter Jira issue key for branch "${branch}"`,
+        placeHolder: 'PIVOT-912',
+        validateInput: v => /^[A-Z]+-\d+$/.test(v.trim()) ? null : 'Must be a Jira issue key like PIVOT-912',
+      });
+      if (!input) return;
+      const issueKey = input.trim().toUpperCase();
+      const mappings = readJiraBranchMappings();
+      mappings[branch] = { issueKey, summary: issueKey, url: getJiraIssueUrl(issueKey) };
+      writeJiraBranchMappings(mappings);
+      vscode.window.showInformationMessage(`Branch "${branch}" mapped to ${issueKey}`);
+      if (jiraSidebarController) await jiraSidebarController.forceRefresh();
+    }),
+
   );
 
   context.subscriptions.push(tracker);
@@ -2672,10 +3289,11 @@ export async function activate(context: vscode.ExtensionContext) {
   }
 
   // On startup, check Monday hooks and sidebar only if enabled
-  if (mondayEnabled) {
+  if (mondayEnabled || isJiraEnabled()) {
     setTimeout(async () => {
       checkBranchForMondayLink();
       if (mondaySidebarController) mondaySidebarController.update();
+      if (jiraSidebarController) jiraSidebarController.update();
     }, 3000);
   }
 }

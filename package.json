@@ -1,8 +1,8 @@
 {
   "name": "toggl-track-auto",
   "displayName": "Toggl Track Auto",
-  "description": "Automatically track time in Toggl based on your git branch and Monday.com tickets",
-  "version": "0.29.2",
+  "description": "Automatically track time in Toggl based on your git branch. Supports Monday.com and Jira ticket systems.",
+  "version": "0.30.0",
   "publisher": "pivotteam",
   "repository": {
     "type": "git",
@@ -63,6 +63,26 @@
       {
         "command": "toggl-track-auto.remapBranchTask",
         "title": "Toggl: Remap Branch to Monday Task"
+      },
+      {
+        "command": "toggl-track-auto.setupJira",
+        "title": "Toggl: Setup Jira Integration"
+      },
+      {
+        "command": "toggl-track-auto.createBranchFromJiraIssue",
+        "title": "Toggl: Create Branch from Jira Issue"
+      },
+      {
+        "command": "toggl-track-auto.copyJiraIssueLink",
+        "title": "Toggl: Copy Jira Issue Link"
+      },
+      {
+        "command": "toggl-track-auto.refreshJiraSidebar",
+        "title": "Toggl: Refresh Jira Sidebar"
+      },
+      {
+        "command": "toggl-track-auto.remapBranchJiraIssue",
+        "title": "Toggl: Remap Branch to Jira Issue"
       }
     ],
     "views": {
@@ -71,6 +91,11 @@
           "type": "webview",
           "id": "togglMondayWebview",
           "name": "Task Details"
+        },
+        {
+          "type": "webview",
+          "id": "togglJiraWebview",
+          "name": "Jira Issue"
         }
       ]
     },
@@ -110,7 +135,7 @@
         },
         "togglTrackAuto.branchPattern": {
           "type": "string",
-          "default": "(\\d{6,})",
+          "default": "([A-Z]{2,}-\\d+|\\d{6,})",
           "description": "Regex pattern to extract ticket ID from branch name"
         },
         "togglTrackAuto.entryFormat": {
@@ -142,6 +167,31 @@
             "pivotteam"
           ],
           "description": "Only track time for repos belonging to these GitHub organizations. Empty array = track all repos."
+        },
+        "togglTrackAuto.jiraEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable Jira integration"
+        },
+        "togglTrackAuto.jiraBaseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Jira base URL (e.g. https://company.atlassian.net)"
+        },
+        "togglTrackAuto.jiraEmail": {
+          "type": "string",
+          "default": "",
+          "description": "Atlassian account email for Jira Basic Auth"
+        },
+        "togglTrackAuto.jiraApiToken": {
+          "type": "string",
+          "default": "",
+          "description": "Jira API token"
+        },
+        "togglTrackAuto.jiraProjectKey": {
+          "type": "string",
+          "default": "PIVOT",
+          "description": "Jira project key (e.g. PIVOT)"
         }
       }
     },
@@ -149,7 +199,7 @@
       "activitybar": [
         {
           "id": "togglMonday",
-          "title": "Monday.com",
+          "title": "Task Tracker",
           "icon": "media/monday-icon.svg"
         }
       ]
