@@ -2151,6 +2151,11 @@ class TogglTracker {
     vscode.workspace.onDidChangeTextDocument(() => this.onActivity());
     vscode.window.onDidChangeActiveTextEditor(() => this.onActivity());
     vscode.window.onDidChangeTextEditorSelection(() => this.onActivity());
+    // Track terminal activity (covers typing in integrated terminal, Claude Code, AI panels)
+    vscode.window.onDidWriteTerminalData(() => this.onActivity());
+    vscode.window.onDidChangeTerminalState(() => this.onActivity());
+    vscode.window.onDidOpenTerminal(() => this.onActivity());
+    vscode.window.onDidChangeActiveTerminal(() => this.onActivity());
 
     // Re-check org when workspace folders change
     vscode.workspace.onDidChangeWorkspaceFolders(async () => {
